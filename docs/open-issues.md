@@ -43,8 +43,9 @@ round trip through the P4, `dropped_wifi` stays 0.
 
 ## 3. No firmware update through the P4 (P4 done, C6 untested)
 
-C6 update implemented, not yet tested on hardware (the C6 needs one IO9-low
-reset first, see below):
+C6 update implemented, not yet tested on hardware. The C6 now runs firmware
+with the OTA server (flashed 2026-10-15 through the P4's `POST /c6/download`),
+so `POST /update/c6` can be tested:
 
 - SDIO plane 3 (`components/sdio_msg/include/sdio_ota.h`): BEGIN / DATA /
   END / ABORT, one request per reply, safe retries by offset.
@@ -69,6 +70,12 @@ link-recovery version reset the C6 in the middle of a serial flash and left it
 without a bootable image; it now waits 30 s and resets at most 3 times. Once
 the C6 has been updated over SDIO both OTA slots hold an image, so a failed
 write to one slot no longer leaves it unbootable.
+
+Update 2026-10-15: the P4 now drives the C6's GPIO9 strap (P4 GPIO45, IO
+domain powered by LDO_VO4), so `POST /c6/download` puts the C6 into its ROM
+downloader without touching the board, even with no bootable image. Without
+LDO_VO4 enabled the strap read low and every P4-driven reset booted the C6
+into the downloader.
 
 ## 4. Network settings
 

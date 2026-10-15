@@ -46,9 +46,12 @@ test/winject_host/                Host unit tests carried over from winject-radi
 Native ESP-IDF v5.5 (`. ~/esp/esp-idf-v5.5.5/export.sh`). On the Waveshare kit the P4's USB-UART is the Type-C "UART" port; the C6's UART0 is on the P2 header (a 3.3 V USB-UART adapter).
 
 ```bash
-# C6: send "dl" on its UART to enter the ROM downloader (no IO9 strap needed), then
+# C6: enter the ROM downloader with `curl -X POST http://<P4 IP>/c6/download` (the P4
+# holds the C6's GPIO9 strap low; works with no bootable image) or by sending "dl" on
+# its UART (running firmware only), then
 cd c6 && idf.py build && cd build && \
   python -m esptool --chip esp32c6 -p /dev/ttyACM1 --before no_reset --after no_reset write_flash @flash_args
+# and boot it: curl -X POST http://<P4 IP>/c6/reset
 ```
 
 The P4 side (proxy image, or an app that includes it such as rover-remote-esp32-p4) is built from [winject-radio-esp32-sdio-proxy](https://github.com/winject-wireless/winject-radio-esp32-sdio-proxy).
@@ -72,7 +75,7 @@ The P4 resets the C6 at boot, gets an address by DHCP (hostname `winject-esp32c6
 | Version | `v1.0.x`: same manager ↔ radio protocol (1.0) |
 | `network` | Set replies `NOK ENOTSUP`; the stored values are still carried in slots |
 | `test_ether_*` | `NOK ENOTSUP` |
-| Firmware update | HTTP on the P4 (`POST /update/c6`, `/update/p4`), two slots + rollback on both chips; UART `dl` + esptool for the first flash. `reset mode=OTA` boots with the radio off |
+| Firmware update | HTTP on the P4 (`POST /update/c6`, `/update/p4`), two slots + rollback on both chips; `POST /c6/download` (P4 holds GPIO9 low) or UART `dl`, then esptool, for the first flash. `reset mode=OTA` boots with the radio off |
 | Cores | One core: WiFi driver (23) > `wifi_tx` (20) > SDIO receive (19) > d-plane forward (17) > m-plane (5) |
 | Rate setting | The C6 driver ignores `esp_wifi_config_80211_tx_rate` (returns OK, rate unchanged); the firmware uses `esp_wifi_config_80211_tx` (phy mode + rate), which applies while running |
 | A-MPDU | The C6's rx_ctrl has no A-MPDU fields, so multi-subframe A-MPDUs are not dropped (winject never sends them) |
