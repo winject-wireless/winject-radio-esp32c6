@@ -78,12 +78,7 @@ static fallback like the Ethernet radio's 192.168.32.1.
 
 ## 5. Proxy addressing
 
-- m-plane replies go to the source of the most recent request, so only one
-  m-plane client at a time.
-- Any 1–23 byte datagram on UDP 9000 re-targets where received frames are sent.
-
-Both match the Ethernet radio's behaviour, but the proxy also accepts them from
-anywhere on the LAN.
+Moved to [winject-radio-esp32-sdio-proxy](https://github.com/winject-wireless/winject-radio-esp32-sdio-proxy#open-issues) with the proxy.
 
 ## 6. Code copied from winject-radio-esp32
 

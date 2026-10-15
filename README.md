@@ -9,7 +9,7 @@ The m-plane commands and the d-plane datagrams are the same as in [winject-radio
  (winject-l3)    ◀─────────────────  (lwIP)  ◀──────────────────────────────  C6: wifi_rx         ◀─ air
 ```
 
-On the P4, a proxy exposes the radio's usual UDP ports (m-plane 22, d-plane 9000), so **winject-manager** talks to it exactly as it does to an Ethernet radio.
+On the P4, a proxy ([winject-radio-esp32-sdio-proxy](https://github.com/winject-wireless/winject-radio-esp32-sdio-proxy)) exposes the radio's usual UDP ports (m-plane 22, d-plane 9000), so **winject-manager** talks to it exactly as it does to an Ethernet radio. This repo holds the C6 firmware and the SDIO wire format (`sdio_msg`), which the proxy fetches from here.
 
 The C6 runs no IP stack: lwIP over SDIO cost about 13–14% of its single 160 MHz core per 1000 packets/s on the bench, the raw SDIO link about 3%.
 
@@ -36,10 +36,7 @@ Open issues are tracked in [docs/open-issues.md](docs/open-issues.md). Known lim
 docs/sdio-link.md                 SDIO message format, bring-up, P4 proxy behaviour, measurements
 components/sdio_msg/              Message encode/parse, shared by both chips (no IDF dependencies)
 components/sdio_link_slave/       C6: SDIO slave link
-components/sdio_link_host/        P4: SDIO host link (resets the C6, receive task, send)
-components/winject_proxy/         P4: UDP 22 / 9000 <-> SDIO
 c6/                               C6 radio firmware (radio, m-plane, settings from winject-radio-esp32)
-p4/                               P4 app: Ethernet (IP101, DHCP) + winject_proxy
 test/host/                        Host unit tests for sdio_msg
 test/winject_host/                Host unit tests carried over from winject-radio-esp32 (GoogleTest)
 ```
@@ -52,15 +49,15 @@ Native ESP-IDF v5.5 (`. ~/esp/esp-idf-v5.5.5/export.sh`). On the Waveshare kit t
 # C6: send "dl" on its UART to enter the ROM downloader (no IO9 strap needed), then
 cd c6 && idf.py build && cd build && \
   python -m esptool --chip esp32c6 -p /dev/ttyACM1 --before no_reset --after no_reset write_flash @flash_args
-# P4
-cd p4 && idf.py build && idf.py -p /dev/ttyACM0 flash
 ```
+
+The P4 side (proxy image, or an app that includes it such as rover-remote-esp32-p4) is built from [winject-radio-esp32-sdio-proxy](https://github.com/winject-wireless/winject-radio-esp32-sdio-proxy).
 
 After that, update both over HTTP through the P4 (raw image as the body); each keeps its previous image until the new one proves itself:
 
 ```bash
 curl --data-binary @c6/build/winject-esp32c6.bin http://<P4 IP>/update/c6   # C6: kept once it answers the P4
-curl --data-binary @p4/build/winject-p4-proxy.bin http://<P4 IP>/update/p4  # P4: kept once reached (e.g. curl http://<P4 IP>/)
+curl --data-binary @winject-p4-proxy.bin http://<P4 IP>/update/p4           # P4: kept once reached (e.g. curl http://<P4 IP>/)
 ```
 
 Flash the C6 over its UART only while the P4 runs a firmware with the 30 s quiet window (any build from 71eb94a on): older ones reset a silent C6 mid-flash.
