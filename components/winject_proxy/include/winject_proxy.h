@@ -12,7 +12,9 @@
 //   HTTP (http_port):   GET / status; POST /update/c6 with the raw C6 image
 //                       (curl --data-binary @winject-esp32c6.bin) streams it
 //                       to the C6 over the OTA plane, resets the C6 and checks
-//                       the new image answers.
+//                       the new image answers. POST /update/p4 updates the P4
+//                       itself (needs a two-slot partition table); the new
+//                       image is kept once it is reached over the network.
 
 #include <stdint.h>
 

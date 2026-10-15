@@ -28,7 +28,7 @@ In the 10 + 15 Mbit/s run the C6 dropped 1 of 28,095 inject frames (`dropped_tx_
 Open issues are tracked in [docs/open-issues.md](docs/open-issues.md). Known limits (see [docs/sdio-link.md](docs/sdio-link.md#bus)):
 - Inject over SDIO reaches the channel limit at OFDM_54M: 3000 frames/s (33.6 Mbit/s) with 0.4% inject-queue drops and 0.7% air loss to the 8811AU.
 - The P4 re-establishes the link when the C6 reboots (m-plane `reset`, crash); a silent C6 is reset only after 30 s.
-- C6 firmware update over SDIO (`POST /update/c6` on the P4) is implemented but not yet tested on hardware (issue 3).
+- Firmware update over HTTP on the P4: `POST /update/p4` works; `POST /update/c6` (over SDIO) is implemented but not yet tested on hardware (issue 3).
 
 ## Layout
 
@@ -56,6 +56,15 @@ cd c6 && idf.py build && cd build && \
 cd p4 && idf.py build && idf.py -p /dev/ttyACM0 flash
 ```
 
+After that, update both over HTTP through the P4 (raw image as the body); each keeps its previous image until the new one proves itself:
+
+```bash
+curl --data-binary @c6/build/winject-esp32c6.bin http://<P4 IP>/update/c6   # C6: kept once it answers the P4
+curl --data-binary @p4/build/winject-p4-proxy.bin http://<P4 IP>/update/p4  # P4: kept once reached (e.g. curl http://<P4 IP>/)
+```
+
+Flash the C6 over its UART only while the P4 runs a firmware with the 30 s quiet window (any build from 71eb94a on): older ones reset a silent C6 mid-flash.
+
 The P4 resets the C6 at boot, gets an address by DHCP (hostname `winject-esp32c6`, printed as `WINJECT_P4_IP ip=…`) and serves the radio on UDP 22 / 9000 of that address. Point winject-manager at it like an ESP32 radio (`winject.device = <P4 IP>`, `console = 22`, `dplane_port = 9000`, `radio_fcs = signal`). The P4 prints proxy and link counters every 10 s (`WINJECT_P4_STATS`).
 
 ## Differences from winject-radio-esp32
@@ -66,7 +75,7 @@ The P4 resets the C6 at boot, gets an address by DHCP (hostname `winject-esp32c6
 | Version | `v1.0.x`: same manager ↔ radio protocol (1.0) |
 | `network` | Set replies `NOK ENOTSUP`; the stored values are still carried in slots |
 | `test_ether_*` | `NOK ENOTSUP` |
-| Firmware update | No HTTP OTA; UART `dl` + esptool. `reset mode=OTA` boots with the radio off |
+| Firmware update | HTTP on the P4 (`POST /update/c6`, `/update/p4`), two slots + rollback on both chips; UART `dl` + esptool for the first flash. `reset mode=OTA` boots with the radio off |
 | Cores | One core: WiFi driver (23) > `wifi_tx` (20) > SDIO receive (19) > d-plane forward (17) > m-plane (5) |
 | Rate setting | The C6 driver ignores `esp_wifi_config_80211_tx_rate` (returns OK, rate unchanged); the firmware uses `esp_wifi_config_80211_tx` (phy mode + rate), which applies while running |
 | A-MPDU | The C6's rx_ctrl has no A-MPDU fields, so multi-subframe A-MPDUs are not dropped (winject never sends them) |

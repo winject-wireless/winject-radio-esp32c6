@@ -41,10 +41,10 @@ driver never starts with 11ax. Checked on air (8811AU-decoded rate and frames/s)
 for OFDM_54M, OFDM_24M, OFDM_MCS7_LGI and DSS_1M_L; `radio_tx` takes 3.6 ms
 round trip through the P4, `dropped_wifi` stays 0.
 
-## 3. No firmware update through the P4 (in progress)
+## 3. No firmware update through the P4 (P4 done, C6 untested)
 
-Implemented, not yet tested on hardware (the C6 needs one IO9-low reset first,
-see below):
+C6 update implemented, not yet tested on hardware (the C6 needs one IO9-low
+reset first, see below):
 
 - SDIO plane 3 (`components/sdio_msg/include/sdio_ota.h`): BEGIN / DATA /
   END / ABORT, one request per reply, safe retries by offset.
@@ -54,6 +54,14 @@ see below):
   `POST /update/c6` (raw image body), which streams the image, resets the C6
   and checks the new image answers; if it does not, one more reset makes the
   bootloader boot the previous image.
+
+P4 self-update, tested 2026-10-15: `POST /update/p4` (raw image body) writes
+the P4's inactive slot (two-slot partition table, rollback enabled) and
+restarts; the new image is confirmed on its first UDP datagram or HTTP request.
+A 560 KB image takes 2.4 s. Checked: update and confirm (survives a reset);
+update then reset before any client reached it (boots the previous image);
+corrupted image, random bytes and an empty body are rejected while the running
+image stays.
 
 Found on the way: a P4 that resets a silent C6 too eagerly breaks UART
 reflashing of the C6 (the ROM downloader does not answer SDIO). The first

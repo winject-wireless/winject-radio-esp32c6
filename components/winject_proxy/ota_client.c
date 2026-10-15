@@ -7,6 +7,8 @@
 
 #include "esp_http_server.h"
 #include "esp_log.h"
+#include "esp_ota_ops.h"
+#include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
@@ -73,6 +75,7 @@ static esp_err_t fail(httpd_req_t *req, const char *status, const char *fmt, esp
 
 static esp_err_t update_c6(httpd_req_t *req)
 {
+    ota_client_confirm_p4_image();
     if (xSemaphoreTake(s_busy, 0) != pdTRUE) {
         return fail(req, "409 Conflict", "ERR an update is already running (%s)\n", ESP_ERR_INVALID_STATE);
     }
@@ -150,17 +153,103 @@ out:
     return ret;
 }
 
+static void restart_task(void *arg)
+{
+    vTaskDelay(pdMS_TO_TICKS(500));  // let the HTTP reply go out
+    esp_restart();
+}
+
+// POST /update/p4: write the raw image into the P4's inactive slot and boot it.
+static esp_err_t update_p4(httpd_req_t *req)
+{
+    if (xSemaphoreTake(s_busy, 0) != pdTRUE) {
+        return fail(req, "409 Conflict", "ERR an update is already running (%s)\n", ESP_ERR_INVALID_STATE);
+    }
+    esp_err_t ret = ESP_OK;
+    const size_t size = req->content_len;
+    const esp_partition_t *target = esp_ota_get_next_update_partition(NULL);
+    esp_ota_handle_t h = 0;
+    static uint8_t buf[4096];
+    const int64_t t0 = esp_log_timestamp();
+    esp_err_t err;
+
+    if (target == NULL || size == 0 || size > target->size) {
+        ret = fail(req, "400 Bad Request", "ERR missing or oversized image (%s)\n", ESP_ERR_INVALID_SIZE);
+        goto out;
+    }
+    err = esp_ota_begin(target, size, &h);
+    if (err != ESP_OK) {
+        ret = fail(req, "500 Internal Server Error", "ERR begin: %s\n", err);
+        goto out;
+    }
+    for (size_t off = 0; off < size;) {
+        const size_t want = size - off < sizeof(buf) ? size - off : sizeof(buf);
+        const int got = httpd_req_recv(req, (char *)buf, want);
+        if (got == HTTPD_SOCK_ERR_TIMEOUT) {
+            continue;
+        }
+        if (got <= 0) {
+            esp_ota_abort(h);
+            ret = fail(req, "400 Bad Request", "ERR upload ended early (%s)\n", ESP_FAIL);
+            goto out;
+        }
+        err = esp_ota_write(h, buf, got);
+        if (err != ESP_OK) {
+            esp_ota_abort(h);
+            ret = fail(req, "500 Internal Server Error", "ERR write: %s\n", err);
+            goto out;
+        }
+        off += got;
+    }
+    err = esp_ota_end(h);  // checks the image
+    if (err == ESP_OK) {
+        err = esp_ota_set_boot_partition(target);
+    }
+    if (err != ESP_OK) {
+        ret = fail(req, "500 Internal Server Error", "ERR image rejected: %s\n", err);
+        goto out;
+    }
+    char msg[200];
+    snprintf(msg, sizeof(msg),
+             "OK P4 updated: %u B in %lld ms -> %s, restarting; it is kept once it is reached "
+             "over the network (e.g. GET /), otherwise the next reset boots the previous image\n",
+             (unsigned)size, (long long)(esp_log_timestamp() - t0), target->label);
+    ESP_LOGI(TAG, "%s", msg);
+    httpd_resp_sendstr(req, msg);
+    xTaskCreate(restart_task, "ota_restart", 2048, NULL, 5, NULL);
+out:
+    xSemaphoreGive(s_busy);
+    return ret;
+}
+
+void ota_client_confirm_p4_image(void)
+{
+    static bool done;
+    if (done) {
+        return;
+    }
+    done = true;
+    esp_ota_img_states_t state;
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    if (esp_ota_get_state_partition(running, &state) == ESP_OK && state == ESP_OTA_IMG_PENDING_VERIFY) {
+        esp_ota_mark_app_valid_cancel_rollback();
+        ESP_LOGI(TAG, "new P4 image on %s confirmed (reached over the network)", running->label);
+    }
+}
+
 static esp_err_t status(httpd_req_t *req)
 {
+    ota_client_confirm_p4_image();
     sdio_link_host_stats_t ls;
     sdio_link_host_get_stats(&ls);
-    char msg[400];
+    char msg[520];
     snprintf(msg, sizeof(msg),
              "winject-radio-esp32c6 P4 proxy\n"
              "link=%s clock_khz=%d downs=%u ups=%u rx_msgs=%u tx_msgs=%u\n"
              "\n"
-             "Update the C6 firmware:\n"
-             "  curl --data-binary @winject-esp32c6.bin http://<this address>/update/c6\n",
+             "Update firmware (raw image as the body):\n"
+             "  curl --data-binary @c6/build/winject-esp32c6.bin http://<this address>/update/c6\n"
+             "  curl --data-binary @p4/build/winject-p4-proxy.bin http://<this address>/update/p4\n",
              sdio_link_host_is_up() ? "up" : "down", ls.real_freq_khz, (unsigned)ls.link_downs,
              (unsigned)ls.link_ups, (unsigned)ls.rx_msgs, (unsigned)ls.tx_msgs);
     httpd_resp_set_type(req, "text/plain");
@@ -185,8 +274,10 @@ esp_err_t ota_client_start_http(uint16_t port)
     }
     const httpd_uri_t get_status = {.uri = "/", .method = HTTP_GET, .handler = status};
     const httpd_uri_t post_c6 = {.uri = "/update/c6", .method = HTTP_POST, .handler = update_c6};
+    const httpd_uri_t post_p4 = {.uri = "/update/p4", .method = HTTP_POST, .handler = update_p4};
     httpd_register_uri_handler(server, &get_status);
     httpd_register_uri_handler(server, &post_c6);
-    ESP_LOGI(TAG, "HTTP on port %u: GET /, POST /update/c6", port);
+    httpd_register_uri_handler(server, &post_p4);
+    ESP_LOGI(TAG, "HTTP on port %u: GET /, POST /update/c6, POST /update/p4", port);
     return ESP_OK;
 }

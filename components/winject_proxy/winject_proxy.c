@@ -99,6 +99,7 @@ static void mplane_task(void *arg)
         if (n <= 0) {
             continue;
         }
+        ota_client_confirm_p4_image();
         s_mplane_peer = from;
         atomic_store(&s_mplane_peer_set, true);
         if (sdio_link_host_send(SDIO_MSG_PLANE_MPLANE, buf, n, 1000) == ESP_OK) {
@@ -119,6 +120,7 @@ static void dplane_task(void *arg)
         if (n <= 0) {
             continue;
         }
+        ota_client_confirm_p4_image();
         if (n <= REGISTRATION_MAX) {
             if (!atomic_load(&s_dplane_peer_set) || s_dplane_peer.sin_addr.s_addr != from.sin_addr.s_addr ||
                 s_dplane_peer.sin_port != from.sin_port) {
