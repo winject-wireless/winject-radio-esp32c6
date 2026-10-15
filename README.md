@@ -25,7 +25,7 @@ Working end to end on the bench (2026-10-15): winject-manager drives the C6 radi
 
 In the 10 + 15 Mbit/s run the C6 dropped 1 of 28,095 inject frames (`dropped_tx_queue`) and forwarded every received frame; the rest of the loss is on air.
 
-Known limits (see [docs/sdio-link.md](docs/sdio-link.md#bus)):
+Open issues are tracked in [docs/open-issues.md](docs/open-issues.md). Known limits (see [docs/sdio-link.md](docs/sdio-link.md#bus)):
 - With P4 → C6 SDIO traffic above about 2000 frames/s the C6's WiFi transmit slows while its CPU idles. At OFDM_54M the radio sends 3019 frames/s from its own test generator, but about 1775 frames/s when the frames arrive over SDIO at 2500/s.
 - No firmware update over the P4 yet: reflash the C6 over its UART (`dl`, below).
 
