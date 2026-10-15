@@ -9,6 +9,10 @@
 //   UDP 9000 (d-plane): every datagram -> d-plane message; 1-23 byte datagrams
 //                       (registrations) also make their source the forward
 //                       peer; C6 messages -> datagrams to that peer.
+//   HTTP (http_port):   GET / status; POST /update/c6 with the raw C6 image
+//                       (curl --data-binary @winject-esp32c6.bin) streams it
+//                       to the C6 over the OTA plane, resets the C6 and checks
+//                       the new image answers.
 
 #include <stdint.h>
 
@@ -28,13 +32,14 @@ typedef struct {
     // about one SDIO write per tick under load.
     int dplane_task_prio;
     uint32_t dplane_send_timeout_ms;  // wait for a free C6 buffer, then drop
+    uint16_t http_port;               // 0 = no HTTP server
 } winject_proxy_config_t;
 
 #define WINJECT_PROXY_CONFIG_DEFAULT()                                              \
     {                                                                               \
         .link = SDIO_LINK_HOST_CONFIG_DEFAULT(), .mplane_port = 22,                 \
         .dplane_port = 9000, .mplane_task_prio = 10, .dplane_task_prio = 15,        \
-        .dplane_send_timeout_ms = 20,                                               \
+        .dplane_send_timeout_ms = 20, .http_port = 80,                              \
     }
 
 typedef struct {

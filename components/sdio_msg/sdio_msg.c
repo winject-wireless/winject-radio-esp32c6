@@ -4,7 +4,8 @@
 
 static bool plane_known(uint8_t plane)
 {
-    return plane == SDIO_MSG_PLANE_MPLANE || plane == SDIO_MSG_PLANE_DPLANE;
+    return plane == SDIO_MSG_PLANE_MPLANE || plane == SDIO_MSG_PLANE_DPLANE ||
+           plane == SDIO_MSG_PLANE_OTA;
 }
 
 size_t sdio_msg_encode(uint8_t *out, uint8_t plane, const void *payload, uint16_t len)

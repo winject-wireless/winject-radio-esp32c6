@@ -12,6 +12,7 @@
 #include "sdio_console.h"
 #include "sdio_endpoint.h"
 #include "sdio_link_slave.h"
+#include "sdio_ota_server.h"
 #include "settings.h"
 #include "test_backend_esp.h"
 #include "uart_console.h"
@@ -38,9 +39,19 @@ static std::optional<mplane_commands> g_commands;
 static void on_link_message(void* ctx, uint8_t plane, const uint8_t* payload, uint16_t len)
 {
     (void)ctx;
+    static bool heard = false;
+    if (!heard)
+    {
+        heard = true;
+        sdio_ota_server_confirm_image();
+    }
     if (plane == SDIO_MSG_PLANE_DPLANE)
     {
         sdio_endpoint::instance().on_dplane(payload, len);
+    }
+    else if (plane == SDIO_MSG_PLANE_OTA)
+    {
+        sdio_ota_server_on_message(payload, len);
     }
     else
     {
@@ -133,8 +144,12 @@ extern "C" void app_main(void)
     store.load_boot();
     const settings_snapshot& boot = store.boot();
 
-    // The link comes up first so the P4 can reach the m-plane even if the
-    // radio fails.
+    // The link and the update path come up first so the P4 can reach the
+    // m-plane and replace the firmware even if the radio fails.
+    if (!sdio_ota_server_start())
+    {
+        ESP_LOGE(TAG, "OTA server start failed");
+    }
     sdio_link_slave_config_t link = SDIO_LINK_SLAVE_CONFIG_DEFAULT();
     link.rx_task_prio = SDIO_LINK_RX_TASK_PRIO;
     if (sdio_link_slave_start(&link, on_link_message, nullptr) != ESP_OK)

@@ -3,6 +3,7 @@ idf_component_register(
         "config_types.cpp"
         "main.cpp"
         "sdio_console.cpp"
+        "sdio_ota_server.cpp"
         "settings.cpp"
         "settings_blob.cpp"
         "uart_console.cpp"

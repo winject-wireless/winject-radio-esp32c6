@@ -39,7 +39,8 @@ static void test_encode(void)
     CHECK(out[9] == 0 && out[10] == 0 && out[11] == 0);
     CHECK(out[12] == 0xee);
     CHECK(sdio_msg_encode(out, SDIO_MSG_PLANE_MPLANE, NULL, 0) == 4);
-    CHECK(sdio_msg_encode(out, 3, p, 5) == 0);
+    CHECK(sdio_msg_encode(out, SDIO_MSG_PLANE_OTA, p, 5) == 12);
+    CHECK(sdio_msg_encode(out, 4, p, 5) == 0);
     CHECK(sdio_msg_encode(out, 0, p, 5) == 0);
     static uint8_t big[SDIO_MSG_MAX_PAYLOAD + 1];
     CHECK(sdio_msg_encode(out, SDIO_MSG_PLANE_DPLANE, big, SDIO_MSG_MAX_PAYLOAD) == SDIO_MSG_MAX_SIZE);

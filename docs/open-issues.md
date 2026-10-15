@@ -41,11 +41,26 @@ driver never starts with 11ax. Checked on air (8811AU-decoded rate and frames/s)
 for OFDM_54M, OFDM_24M, OFDM_MCS7_LGI and DSS_1M_L; `radio_tx` takes 3.6 ms
 round trip through the P4, `dropped_wifi` stays 0.
 
-## 3. No firmware update through the P4
+## 3. No firmware update through the P4 (in progress)
 
-The C6 can only be reflashed over its own UART (`dl`, then esptool); the P4 app
-has no OTA either. A deployed unit needs an update path: e.g. an OTA plane on
-the SDIO link for the C6 and HTTP OTA on the P4.
+Implemented, not yet tested on hardware (the C6 needs one IO9-low reset first,
+see below):
+
+- SDIO plane 3 (`components/sdio_msg/include/sdio_ota.h`): BEGIN / DATA /
+  END / ABORT, one request per reply, safe retries by offset.
+- C6: OTA task writing the inactive slot (sequential erase), app rollback
+  enabled; a new image is confirmed by its first message from the P4.
+- P4 `winject_proxy`: HTTP server, `GET /` status and
+  `POST /update/c6` (raw image body), which streams the image, resets the C6
+  and checks the new image answers; if it does not, one more reset makes the
+  bootloader boot the previous image.
+
+Found on the way: a P4 that resets a silent C6 too eagerly breaks UART
+reflashing of the C6 (the ROM downloader does not answer SDIO). The first
+link-recovery version reset the C6 in the middle of a serial flash and left it
+without a bootable image; it now waits 30 s and resets at most 3 times. Once
+the C6 has been updated over SDIO both OTA slots hold an image, so a failed
+write to one slot no longer leaves it unbootable.
 
 ## 4. Network settings
 
@@ -89,11 +104,11 @@ The C6's `rx_ctrl` (WiFi 6 MAC) has no `aggregation` / `ampdu_cnt`, so
 multi-subframe A-MPDUs are forwarded instead of dropped. winject never sends
 A-MPDUs, so only foreign traffic is affected.
 
-## 10. An m-plane `reset` leaves the C6 unreachable
+## 10. An m-plane `reset` left the C6 unreachable (resolved)
 
-`reset` reboots the C6 alone. The P4 does not notice and never re-initialises
-the SDIO link, so the radio stays unreachable until the P4 restarts (which
-resets the C6 again). The P4 needs to detect the slave reset (link errors, or
-the ready register clearing) and redo the bring-up; settings saved before the
-reset (e.g. `tune_*` + `save`) do take effect once the link is back.
-
+`reset` reboots the C6 alone and the P4 never re-initialised the link.
+`sdio_link_host` now detects a lost C6 (transfer errors, or an idle health
+check of the ready register once a second) and redoes the bring-up; on the
+bench the link was back 130 ms after detection. A C6 that stays silent is
+reset through CHIP_PU only after 30 s, at most 3 times. The P4 also starts
+with the link down if the C6 does not answer at boot.

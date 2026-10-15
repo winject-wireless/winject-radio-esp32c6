@@ -27,8 +27,8 @@ In the 10 + 15 Mbit/s run the C6 dropped 1 of 28,095 inject frames (`dropped_tx_
 
 Open issues are tracked in [docs/open-issues.md](docs/open-issues.md). Known limits (see [docs/sdio-link.md](docs/sdio-link.md#bus)):
 - Inject over SDIO reaches the channel limit at OFDM_54M: 3000 frames/s (33.6 Mbit/s) with 0.4% inject-queue drops and 0.7% air loss to the 8811AU.
-- An m-plane `reset` leaves the radio unreachable until the P4 restarts (issue 10).
-- No firmware update over the P4 yet: reflash the C6 over its UART (`dl`, below).
+- The P4 re-establishes the link when the C6 reboots (m-plane `reset`, crash); a silent C6 is reset only after 30 s.
+- C6 firmware update over SDIO (`POST /update/c6` on the P4) is implemented but not yet tested on hardware (issue 3).
 
 ## Layout
 

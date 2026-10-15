@@ -94,10 +94,10 @@ void app_main(void)
         printf("WINJECT_P4_STATS mreq=%" PRIu32 " mrep=%" PRIu32 " mdrop=%" PRIu32
                " ddown=%" PRIu32 " ddown_drop=%" PRIu32 " dup=%" PRIu32 " dup_nopeer=%" PRIu32
                " dup_fail=%" PRIu32 " link_rx_bad=%" PRIu32 " link_rx_err=%" PRIu32
-               " link_tx_err=%" PRIu32 "\n",
+               " link_tx_err=%" PRIu32 " link_downs=%" PRIu32 " link_ups=%" PRIu32 "\n",
                ps.mplane_requests, ps.mplane_replies, ps.mplane_dropped, ps.dplane_down,
                ps.dplane_down_dropped, ps.dplane_up, ps.dplane_up_no_peer, ps.dplane_up_failed,
-               ls.rx_bad, ls.rx_errors, ls.tx_errors);
+               ls.rx_bad, ls.rx_errors, ls.tx_errors, ls.link_downs, ls.link_ups);
         fflush(stdout);
     }
 }

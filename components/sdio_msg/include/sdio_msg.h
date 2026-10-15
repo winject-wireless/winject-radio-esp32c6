@@ -15,6 +15,8 @@ extern "C" {
 #define SDIO_MSG_HDR_LEN 4u
 #define SDIO_MSG_PLANE_MPLANE 1u
 #define SDIO_MSG_PLANE_DPLANE 2u
+// C6 firmware update (sdio_ota.h); between the P4 proxy and the C6 only.
+#define SDIO_MSG_PLANE_OTA 3u
 // Largest datagram: a received MPDU (1500) plus its 4-byte trailer.
 #define SDIO_MSG_MAX_PAYLOAD 1504u
 #define SDIO_MSG_ALIGN4(n) (((n) + 3u) & ~3u)

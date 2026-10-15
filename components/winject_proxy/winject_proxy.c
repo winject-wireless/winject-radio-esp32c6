@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "ota_client.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lwip/sockets.h"
@@ -59,6 +60,10 @@ static int bind_udp(uint16_t port, int rcvbuf)
 // Link receive task: a message from the C6.
 static void on_link_message(void *ctx, uint8_t plane, const uint8_t *payload, uint16_t len)
 {
+    if (plane == SDIO_MSG_PLANE_OTA) {
+        ota_client_on_reply(payload, len);
+        return;
+    }
     if (plane == SDIO_MSG_PLANE_MPLANE) {
         if (!atomic_load(&s_mplane_peer_set)) {
             STAT_INC(mplane_dropped);
@@ -140,6 +145,12 @@ esp_err_t winject_proxy_start(const winject_proxy_config_t *config)
     s_dplane_fd = bind_udp(config->dplane_port, 64 * 1024);
     if (s_mplane_fd < 0 || s_dplane_fd < 0) {
         return ESP_FAIL;
+    }
+    if (config->http_port) {
+        esp_err_t herr = ota_client_start_http(config->http_port);
+        if (herr != ESP_OK) {
+            ESP_LOGE(TAG, "HTTP server: 0x%x", herr);
+        }
     }
     esp_err_t err = sdio_link_host_start(&config->link, on_link_message, NULL);
     if (err != ESP_OK) {
