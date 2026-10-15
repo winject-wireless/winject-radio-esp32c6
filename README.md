@@ -54,7 +54,7 @@ cd c6 && idf.py build && cd build && \
 # and boot it: curl -X POST http://<P4 IP>/c6/reset
 ```
 
-The P4 side (proxy image, or an app that includes it such as rover-remote-esp32-p4) is built from [winject-radio-esp32-sdio-proxy](https://github.com/winject-wireless/winject-radio-esp32-sdio-proxy).
+The P4 side (proxy image, or an app that includes it such as rover-remote-esp32p4) is built from [winject-radio-esp32-sdio-proxy](https://github.com/winject-wireless/winject-radio-esp32-sdio-proxy).
 
 After that, update both over HTTP through the P4 (raw image as the body); each keeps its previous image until the new one proves itself:
 
