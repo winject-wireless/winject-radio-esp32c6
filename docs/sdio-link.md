@@ -37,6 +37,10 @@ Commands, replies and `cmd:<u8>` correlation are unchanged. Commands about the E
 
 The C6 classifies d-plane payloads by length exactly as the Ethernet radio classifies UDP 9000 datagrams. A registration marks the peer (the P4) present; without one, received frames count as `dropped_no_peer`, as before.
 
+## Bring-up
+
+The P4 resets the C6 (CHIP_PU) and enumerates the SDIO card. Enumeration can succeed against the C6 ROM's slave before the firmware re-initialises it, so the C6 writes `0xC6` to slave scratch register 0 once its link is up, and the P4 repeats enumeration until it reads that value.
+
 ## Flow control
 
 The SDIO slave only accepts a host write when it has receive buffers loaded, so the link itself never drops. Drops stay where the counters already account for them: the C6's inject queue (`dropped_tx_queue`) and RX pool (`dropped_rx_queue`).
@@ -54,4 +58,8 @@ Replies go to the last requester, so one m-plane client at a time is expected (w
 
 ## Bus
 
-4-bit SDIO at 20 MHz. At 40 MHz, saturating P4 → C6 traffic (94 Mbps) halves the C6's injection rate; at 20 MHz (69 Mbps measured with ESP-Hosted RawTP) the C6 keeps full rate.
+4-bit SDIO at 20 MHz. The C6 sends in stream mode, so one host read collects every message it has queued (up to 8 KB); while a P4 sender is waiting, the host reads about one message at a time so the two directions alternate.
+
+Measured with `sdio_link_host` / `sdio_link_slave` (1400-byte d-plane payloads, no loss in any step): 50 Mbps P4 → C6, 62 Mbps C6 → P4, about 56 Mbps total when both saturate (split about 13 / 43 in favour of C6 → P4). The C6 spends about 3% CPU per 1000 messages/s.
+
+SDIO traffic slows the C6's WiFi transmit even with CPU to spare: the driver's TX queue stays full. With the C6 injecting 1786 frames/s (OFDM_54M), it keeps full rate up to about 2000 messages/s P4 → C6 and 4000 C6 → P4, and drops to about 1050 frames/s at 4000 messages/s P4 → C6. The cause is not known (the WiFi driver is closed); a P4 → C6 rate equal to the injection rate, which is what a winject radio carries, stays below the point where it starts.

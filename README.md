@@ -15,12 +15,22 @@ The C6 runs no IP stack. A bench on the same board measured lwIP over SDIO at ab
 
 ## Status
 
-Design. No firmware yet.
+The SDIO link is implemented and benched (see [docs/sdio-link.md](docs/sdio-link.md#bus)). The radio firmware and the P4 proxy are next.
 
-## Layout (planned)
+## Layout
 
 ```
-docs/sdio-link.md     SDIO message format and P4 proxy behaviour
-c6/                   C6 firmware (radio, m-plane, SDIO slave link)
-p4/components/        P4 side: SDIO host link and UDP proxy, as IDF components
+docs/sdio-link.md                 SDIO message format, bring-up, P4 proxy behaviour, measurements
+components/sdio_msg/              Message encode/parse, shared by both chips (no IDF dependencies)
+components/sdio_link_slave/       C6: SDIO slave link
+components/sdio_link_host/        P4: SDIO host link (resets the C6, receive task, send)
+test/host/                        Host unit tests
+```
+
+Planned: `c6/` (radio firmware) and a P4 proxy component.
+
+## Host unit tests
+
+```bash
+cmake -S test/host -B build_host_test && cmake --build build_host_test && ctest --test-dir build_host_test
 ```
