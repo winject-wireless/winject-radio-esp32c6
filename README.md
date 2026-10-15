@@ -11,11 +11,23 @@ The m-plane commands and the d-plane datagrams are the same as in [winject-radio
 
 On the P4, a proxy exposes the radio's usual UDP ports (m-plane 22, d-plane 9000), so **winject-manager** talks to it exactly as it does to an Ethernet radio.
 
-The C6 runs no IP stack. A bench on the same board measured lwIP over SDIO at about 13–14% of the C6's CPU per 1000 packets/s. A raw SDIO path costs far less, and the C6 has one 160 MHz core shared with the WiFi driver.
+The C6 runs no IP stack: lwIP over SDIO cost about 13–14% of its single 160 MHz core per 1000 packets/s on the bench, the raw SDIO link about 3%.
 
 ## Status
 
-The SDIO link is implemented and benched (see [docs/sdio-link.md](docs/sdio-link.md#bus)). The radio firmware and the P4 proxy are next.
+Working end to end on the bench (2026-10-15): winject-manager drives the C6 radio through the P4 at 192.168.253.x like an Ethernet radio (version check, `radio_caps_info`, `radio_tx`, domain filter, `save`), with iperf traffic both ways against an RTL8811AU radio (`winject-radio-realtek`):
+
+| iperf UDP, 1400 B, OFDM_24M, ch 1 | C6 injects (A→B) | C6 receives (B→A) |
+|---|---|---|
+| 5 Mbit/s | 0.55% loss | 0.18% |
+| 10 Mbit/s | 0.44% (3.2% in another run) | 0.12–0.15% |
+| 15 Mbit/s | 0.88% | 0.20% |
+
+In the 10 + 15 Mbit/s run the C6 dropped 1 of 28,095 inject frames (`dropped_tx_queue`) and forwarded every received frame; the rest of the loss is on air.
+
+Known limits (see [docs/sdio-link.md](docs/sdio-link.md#bus)):
+- With P4 → C6 SDIO traffic above about 2000 frames/s the C6's WiFi transmit slows while its CPU idles. At OFDM_54M the radio sends 3019 frames/s from its own test generator, but about 1775 frames/s when the frames arrive over SDIO at 2500/s.
+- No firmware update over the P4 yet: reflash the C6 over its UART (`dl`, below).
 
 ## Layout
 
@@ -24,13 +36,45 @@ docs/sdio-link.md                 SDIO message format, bring-up, P4 proxy behavi
 components/sdio_msg/              Message encode/parse, shared by both chips (no IDF dependencies)
 components/sdio_link_slave/       C6: SDIO slave link
 components/sdio_link_host/        P4: SDIO host link (resets the C6, receive task, send)
-test/host/                        Host unit tests
+components/winject_proxy/         P4: UDP 22 / 9000 <-> SDIO
+c6/                               C6 radio firmware (radio, m-plane, settings from winject-radio-esp32)
+p4/                               P4 app: Ethernet (IP101, DHCP) + winject_proxy
+test/host/                        Host unit tests for sdio_msg
+test/winject_host/                Host unit tests carried over from winject-radio-esp32 (GoogleTest)
 ```
 
-Planned: `c6/` (radio firmware) and a P4 proxy component.
+## Build and flash
+
+Native ESP-IDF v5.5 (`. ~/esp/esp-idf-v5.5.5/export.sh`). On the Waveshare kit the P4's USB-UART is the Type-C "UART" port; the C6's UART0 is on the P2 header (a 3.3 V USB-UART adapter).
+
+```bash
+# C6: send "dl" on its UART to enter the ROM downloader (no IO9 strap needed), then
+cd c6 && idf.py build && cd build && \
+  python -m esptool --chip esp32c6 -p /dev/ttyACM1 --before no_reset --after no_reset write_flash @flash_args
+# P4
+cd p4 && idf.py build && idf.py -p /dev/ttyACM0 flash
+```
+
+The P4 resets the C6 at boot, gets an address by DHCP (hostname `winject-esp32c6`, printed as `WINJECT_P4_IP ip=…`) and serves the radio on UDP 22 / 9000 of that address. Point winject-manager at it like an ESP32 radio (`winject.device = <P4 IP>`, `console = 22`, `dplane_port = 9000`, `radio_fcs = signal`). The P4 prints proxy and link counters every 10 s (`WINJECT_P4_STATS`).
+
+## Differences from winject-radio-esp32
+
+| Topic | C6 radio |
+|---|---|
+| Host link | SDIO to the P4 (20 MHz, 4-bit); the P4 proxy owns the IP address and UDP ports |
+| Version | `v1.0.x`: same manager ↔ radio protocol (1.0) |
+| `network` | Set replies `NOK ENOTSUP`; the stored values are still carried in slots |
+| `test_ether_*` | `NOK ENOTSUP` |
+| Firmware update | No HTTP OTA; UART `dl` + esptool. `reset mode=OTA` boots with the radio off |
+| Cores | One core: WiFi driver (23) > `wifi_tx` (20) > SDIO receive (19) > d-plane forward (17) > m-plane (5) |
+| Rate setting | The C6 driver ignores `esp_wifi_config_80211_tx_rate` while running (frames stay at 1 Mbit/s); `radio_tx modulation=` restarts the driver and uses `esp_wifi_config_80211_tx` |
+| A-MPDU | The C6's rx_ctrl has no A-MPDU fields, so multi-subframe A-MPDUs are not dropped (winject never sends them) |
+| LEDs | None (the WT32 LED pins are the C6's UART) |
+| TX pacing | The Ethernet radio's constants (in-flight cap 4, bursts of 8): the cap does not limit rate here (3019 frames/s at OFDM_54M) |
 
 ## Host unit tests
 
 ```bash
 cmake -S test/host -B build_host_test && cmake --build build_host_test && ctest --test-dir build_host_test
+cmake -S test/winject_host -B build_winject_host_test && cmake --build build_winject_host_test && ctest --test-dir build_winject_host_test
 ```

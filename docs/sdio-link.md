@@ -25,7 +25,7 @@ offset  size  field
 | P4 → C6 | One request datagram: one or more `cmd:<u8> …` lines | ≤ 1499 bytes, as over UDP |
 | C6 → P4 | One reply datagram | ≤ 1500 bytes; longer replies are split at line boundaries into several messages, as UDP replies continue in further datagrams |
 
-Commands, replies and `cmd:<u8>` correlation are unchanged. Commands about the Ethernet network (`network`, DHCP, static address) do not apply to the C6 and reply `NOK ENOSYS`.
+Commands, replies and `cmd:<u8>` correlation are unchanged. Setting the Ethernet network (`network ip=… type=…`) and the Ethernet tests (`test_ether_*`) reply `NOK ENOTSUP`: the C6 has no network interface. `network` without arguments still prints the stored values, which are carried in settings slots unchanged.
 
 ## d-plane (`plane = 2`)
 
