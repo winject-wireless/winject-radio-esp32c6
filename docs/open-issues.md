@@ -27,13 +27,19 @@ link bench and the eppp comparison used 0xa5 frames, so their TX-slowdown
 numbers are confounded by this. Diagnostic: the C6 UART `mon 1` prints the
 inject path's rates, queue, in-flight and per-task CPU once a second.
 
-## 2. Rate changes restart the WiFi driver
+## 2. Rate changes restarted the WiFi driver (resolved)
 
 On the C6, `esp_wifi_config_80211_tx_rate` returns `ESP_OK` while the driver
-runs, but frames keep going out at 1 Mbit/s. `wifi::apply_modulation` now stops
-and restarts the driver and sets the rate with `esp_wifi_config_80211_tx`. A
-modulation change takes about 31 ms, drops what is in flight (counted in
-`dropped_wifi`) and briefly stops promiscuous receive.
+runs but leaves the rate unchanged (frames stayed at 1 Mbit/s). The first
+workaround restarted the driver for every modulation change (about 31 ms, frames
+in flight dropped, promiscuous receive briefly off). Testing each call while
+running showed the restart is not needed: `esp_wifi_config_80211_tx` (phy mode
++ rate) applies immediately, the old call never does, and the protocol mask was
+already b/g/n. `apply_modulation` now uses `esp_wifi_config_80211_tx` without a
+restart, and `initialize` sets the protocol before `esp_wifi_start` so the
+driver never starts with 11ax. Checked on air (8811AU-decoded rate and frames/s)
+for OFDM_54M, OFDM_24M, OFDM_MCS7_LGI and DSS_1M_L; `radio_tx` takes 3.6 ms
+round trip through the P4, `dropped_wifi` stays 0.
 
 ## 3. No firmware update through the P4
 

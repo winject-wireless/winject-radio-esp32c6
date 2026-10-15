@@ -250,41 +250,25 @@ bool wifi::apply_modulation()
 
 #if CONFIG_SOC_WIFI_HE_SUPPORT
     // C6 (WiFi 6 driver): esp_wifi_config_80211_tx_rate returns ESP_OK while
-    // running but frames keep going out at 1 Mbps. Restart the driver with
-    // the protocol set (no 11ax), then set phy mode + rate with
-    // esp_wifi_config_80211_tx after start (both rate APIs fail between stop
-    // and start on IDF v5.5). The caller re-applies the channel.
-    (void)esp_wifi_set_promiscuous(false);
-    esp_err_t he_err = esp_wifi_stop();
-    if (he_err != ESP_OK)
+    // running but leaves the rate unchanged; esp_wifi_config_80211_tx (phy
+    // mode + rate) applies it while running, no restart needed (bench
+    // 2026-10-15: 54M -> 24M -> 1M -> 24M, checked on air).
+    if (!apply_sta_decode_protocol())
     {
-        ESP_LOGE(TAG, "stop for rate failed: %s", esp_err_to_name(he_err));
         return false;
     }
-    const bool proto_ok = apply_sta_decode_protocol();
-    he_err = esp_wifi_start();
-    if (he_err != ESP_OK || !proto_ok)
-    {
-        ESP_LOGE(TAG, "start for rate failed: %s", esp_err_to_name(he_err));
-        return false;
-    }
-    esp_wifi_disconnect();
-    (void)esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW20);
     wifi_tx_rate_config_t rc = {};
     rc.phymode = phymode_for_rate(modulation_rate);
     rc.rate = modulation_rate;
-    he_err = esp_wifi_config_80211_tx(WIFI_IF_STA, &rc);
+    const esp_err_t he_err = esp_wifi_config_80211_tx(WIFI_IF_STA, &rc);
     if (he_err != ESP_OK)
     {
         ESP_LOGE(TAG, "config_80211_tx %s failed: %s", modulation_name, esp_err_to_name(he_err));
         return false;
     }
-    tx_.reset_in_flight();
-    if (!tx_.apply_power() || !tx_.apply_cca() || !tx_.apply_tx_done_cb())
-    {
-        return false;
-    }
-    return rx_.apply_monitor();
+    (void)esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW20);
+    (void)tx_.apply_power();
+    return true;
 #endif
 
     if (!apply_sta_decode_protocol())
@@ -385,6 +369,12 @@ bool wifi::initialize(uint8_t tx_ring, uint8_t rx_ring)
     if (apply_country() != ESP_OK)
     {
         ESP_LOGE(TAG, "wifi country failed");
+        return false;
+    }
+    // Set the protocol before start: on the C6 the driver otherwise starts
+    // with 11ax enabled.
+    if (!apply_sta_decode_protocol())
+    {
         return false;
     }
     if (esp_wifi_start() != ESP_OK)

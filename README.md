@@ -68,7 +68,7 @@ The P4 resets the C6 at boot, gets an address by DHCP (hostname `winject-esp32c6
 | `test_ether_*` | `NOK ENOTSUP` |
 | Firmware update | No HTTP OTA; UART `dl` + esptool. `reset mode=OTA` boots with the radio off |
 | Cores | One core: WiFi driver (23) > `wifi_tx` (20) > SDIO receive (19) > d-plane forward (17) > m-plane (5) |
-| Rate setting | The C6 driver ignores `esp_wifi_config_80211_tx_rate` while running (frames stay at 1 Mbit/s); `radio_tx modulation=` restarts the driver and uses `esp_wifi_config_80211_tx` |
+| Rate setting | The C6 driver ignores `esp_wifi_config_80211_tx_rate` (returns OK, rate unchanged); the firmware uses `esp_wifi_config_80211_tx` (phy mode + rate), which applies while running |
 | A-MPDU | The C6's rx_ctrl has no A-MPDU fields, so multi-subframe A-MPDUs are not dropped (winject never sends them) |
 | LEDs | None (the WT32 LED pins are the C6's UART) |
 | TX pacing | The Ethernet radio's constants (in-flight cap 4, bursts of 8): they do not limit rate here (3000+ frames/s at OFDM_54M) |
