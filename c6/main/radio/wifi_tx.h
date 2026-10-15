@@ -45,6 +45,11 @@ public:
     uint32_t dropped_tx_queue() const;
     uint32_t dropped_wifi() const;
     uint32_t air_pkt() const;
+    // Diagnostics (UART `mon`): esp_wifi_80211_tx calls, NO_MEM returns, and
+    // submits that had to wait for the in-flight cap.
+    uint32_t submits() const;
+    uint32_t nomem() const;
+    uint32_t slot_waits() const;
     void note_invalid_frame();
 
 private:
@@ -79,6 +84,9 @@ private:
     std::atomic<uint32_t> dropped_tx_queue_{0};
     std::atomic<uint32_t> dropped_wifi_{0};
     std::atomic<uint32_t> air_pkt_{0};
+    std::atomic<uint32_t> submits_{0};
+    std::atomic<uint32_t> nomem_{0};
+    std::atomic<uint32_t> slot_waits_{0};
     std::atomic<int64_t> last_progress_us_{0};
     uint8_t burst_sent_ = 0;
     uint32_t fail_count_ = 0;

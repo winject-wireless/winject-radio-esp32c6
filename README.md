@@ -26,7 +26,8 @@ Working end to end on the bench (2026-10-15): winject-manager drives the C6 radi
 In the 10 + 15 Mbit/s run the C6 dropped 1 of 28,095 inject frames (`dropped_tx_queue`) and forwarded every received frame; the rest of the loss is on air.
 
 Open issues are tracked in [docs/open-issues.md](docs/open-issues.md). Known limits (see [docs/sdio-link.md](docs/sdio-link.md#bus)):
-- With P4 → C6 SDIO traffic above about 2000 frames/s the C6's WiFi transmit slows while its CPU idles. At OFDM_54M the radio sends 3019 frames/s from its own test generator, but about 1775 frames/s when the frames arrive over SDIO at 2500/s.
+- Inject over SDIO reaches the channel limit at OFDM_54M: 3000 frames/s (33.6 Mbit/s) with 0.4% inject-queue drops and 0.7% air loss to the 8811AU.
+- An m-plane `reset` leaves the radio unreachable until the P4 restarts (issue 10).
 - No firmware update over the P4 yet: reflash the C6 over its UART (`dl`, below).
 
 ## Layout
@@ -70,7 +71,8 @@ The P4 resets the C6 at boot, gets an address by DHCP (hostname `winject-esp32c6
 | Rate setting | The C6 driver ignores `esp_wifi_config_80211_tx_rate` while running (frames stay at 1 Mbit/s); `radio_tx modulation=` restarts the driver and uses `esp_wifi_config_80211_tx` |
 | A-MPDU | The C6's rx_ctrl has no A-MPDU fields, so multi-subframe A-MPDUs are not dropped (winject never sends them) |
 | LEDs | None (the WT32 LED pins are the C6's UART) |
-| TX pacing | The Ethernet radio's constants (in-flight cap 4, bursts of 8): the cap does not limit rate here (3019 frames/s at OFDM_54M) |
+| TX pacing | The Ethernet radio's constants (in-flight cap 4, bursts of 8): they do not limit rate here (3000+ frames/s at OFDM_54M) |
+| Diagnostics | UART `mon 1`: inject-path rates (`in`, `air`, `submit`, `nomem`, `slotwait`, `dropq`), queue, in-flight, heap, per-task CPU once a second |
 
 ## Host unit tests
 

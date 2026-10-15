@@ -3,18 +3,29 @@
 Found while bringing up the C6 radio end to end (2026-10-15). Numbers are from
 the Waveshare ESP32-P4-WIFI6-DEV-KIT bench, ch 1, 1400-byte frames.
 
-## 1. SDIO traffic slows the C6's WiFi transmit
+## 1. Repeating payloads slow the C6's transmit (resolved: test artifact)
 
-With more than about 2000 frames/s arriving from the P4, the C6 sends fewer
-frames than it is given: at OFDM_54M, 2500 frames/s in gives about 1775 frames/s
-on air, while the radio's own test generator reaches 3019 frames/s with the
-link idle. The driver's TX queue is full (`NO_MEM`, all frames in flight) and
-the CPU is mostly idle. In a winject radio every injected frame crosses SDIO,
-so this caps inject at roughly 20 Mbit/s at 54M.
+The reported "SDIO slows WiFi TX" was the frame body. Bench frames were filled
+with a constant 0xa5 (rtk_loss, c6_radio and the first end-to-end bench). With
+that fill, the C6 defers on CCA far more often and tops out near 2100 frames/s
+at OFDM_54M; `cca=false` restores full rate. With varied bytes (as real,
+FEC-coded payloads are), frames injected over SDIO reach the channel limit:
+3000 frames/s (33.6 Mbit/s) offered, 122 of 30,000 dropped at the inject queue,
+the same rate the built-in generator reaches with the link idle (about
+3200 frames/s). SDIO traffic alone (2000 frames/s crossing the link and
+discarded) does not slow the generator either. Body test, 2500 frames/s at
+OFDM_54M, CCA on:
 
-eppp (lwIP over SDIO) carried 40 Mbit/s into the C6 without slowing TX; the raw
-link slows it from about 22–33 Mbit/s. 4 slave receive buffers are better than
-16. Cause unknown.
+| Body | On air | Inject-queue drops |
+|---|---|---|
+| all zeros | full rate | 0 |
+| varying bytes | full rate | 0 |
+| constant 0xa5 | ~1957 frames/s | 2672 of 15,000 |
+
+Open: why a constant 0xa5 body (but not zeros) makes CCA defer. The step-1
+link bench and the eppp comparison used 0xa5 frames, so their TX-slowdown
+numbers are confounded by this. Diagnostic: the C6 UART `mon 1` prints the
+inject path's rates, queue, in-flight and per-task CPU once a second.
 
 ## 2. Rate changes restart the WiFi driver
 
@@ -71,3 +82,12 @@ been run against an ESP32 radio or a second C6.
 The C6's `rx_ctrl` (WiFi 6 MAC) has no `aggregation` / `ampdu_cnt`, so
 multi-subframe A-MPDUs are forwarded instead of dropped. winject never sends
 A-MPDUs, so only foreign traffic is affected.
+
+## 10. An m-plane `reset` leaves the C6 unreachable
+
+`reset` reboots the C6 alone. The P4 does not notice and never re-initialises
+the SDIO link, so the radio stays unreachable until the P4 restarts (which
+resets the C6 again). The P4 needs to detect the slave reset (link errors, or
+the ready register clearing) and redo the bring-up; settings saved before the
+reset (e.g. `tune_*` + `save`) do take effect once the link is back.
+

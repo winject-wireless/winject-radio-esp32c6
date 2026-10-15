@@ -62,4 +62,4 @@ Replies go to the last requester, so one m-plane client at a time is expected (w
 
 Measured with `sdio_link_host` / `sdio_link_slave` (1400-byte d-plane payloads, no loss in any step): 50 Mbps P4 → C6, 62 Mbps C6 → P4, about 56 Mbps total when both saturate (split about 13 / 43 in favour of C6 → P4). The C6 spends about 3% CPU per 1000 messages/s.
 
-SDIO traffic slows the C6's WiFi transmit even with CPU to spare: the driver's TX queue stays full. With the C6 injecting 1786 frames/s (OFDM_54M), it keeps full rate up to about 2000 messages/s P4 → C6 and 4000 C6 → P4, and drops to about 1050 frames/s at 4000 messages/s P4 → C6. The cause is not known (the WiFi driver is closed); a P4 → C6 rate equal to the injection rate, which is what a winject radio carries, stays below the point where it starts.
+Injecting frames that arrive over the link reaches the channel limit at OFDM_54M (3000 frames/s, 33.6 Mbit/s, with 0.4% inject-queue drops). An earlier reading that SDIO traffic slows the C6's WiFi transmit came from test frames filled with a constant byte (see [open-issues.md](open-issues.md), issue 1).

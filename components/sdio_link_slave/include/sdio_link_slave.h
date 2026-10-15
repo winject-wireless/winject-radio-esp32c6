@@ -23,10 +23,12 @@ typedef struct {
     int rx_task_stack;
 } sdio_link_slave_config_t;
 
-// 4 receive buffers: with 16, the P4 writes longer back-to-back bursts and
-// the C6's WiFi injection rate drops further under SDIO load (bench
-// 2026-10-15: 1443-1712 vs 1750-1805 pps injected with the link saturated
-// both ways) for almost no gain in P4 -> C6 throughput (50.3 vs 48.6 Mbps).
+// 4 receive buffers: in the link bench, 16 let the P4 write longer bursts and
+// the C6's injection slowed more (1443-1712 vs 1750-1805 pps with the link
+// saturated both ways), for almost no gain in P4 -> C6 throughput (50.3 vs
+// 48.6 Mbps). Those runs injected constant-0xa5 frames, which slow CCA by
+// themselves (docs/open-issues.md, issue 1), so the gap may be smaller with
+// real payloads.
 #define SDIO_LINK_SLAVE_CONFIG_DEFAULT() \
     { .rx_bufs = 4, .tx_bufs = 16, .rx_task_prio = 19, .rx_task_stack = 4096 }
 

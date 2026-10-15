@@ -204,8 +204,27 @@ void wifi_tx::reset_in_flight()
     last_progress_us_.store(esp_timer_get_time(), std::memory_order_relaxed);
 }
 
+uint32_t wifi_tx::submits() const
+{
+    return submits_.load(std::memory_order_relaxed);
+}
+
+uint32_t wifi_tx::nomem() const
+{
+    return nomem_.load(std::memory_order_relaxed);
+}
+
+uint32_t wifi_tx::slot_waits() const
+{
+    return slot_waits_.load(std::memory_order_relaxed);
+}
+
 void wifi_tx::wait_for_driver_slot()
 {
+    if (in_flight_.load(std::memory_order_relaxed) >= WIFI_RADIO_MAX_IN_FLIGHT)
+    {
+        slot_waits_.fetch_add(1, std::memory_order_relaxed);
+    }
     // Bound outstanding TX so we do not storm NO_MEM and starve EMAC DMA.
     for (int spin = 0; in_flight_.load(std::memory_order_relaxed) >=
                        WIFI_RADIO_MAX_IN_FLIGHT;
@@ -271,6 +290,7 @@ bool wifi_tx::inject_retry(const uint8_t* frame, size_t len)
         wait_for_driver_slot();
         // Count before submitting: TX-done can run before 80211_tx returns.
         in_flight_.fetch_add(1, std::memory_order_relaxed);
+        submits_.fetch_add(1, std::memory_order_relaxed);
         const esp_err_t err = esp_wifi_80211_tx(
             WIFI_IF_STA, frame, static_cast<int>(len), false);
         if (err == ESP_OK)
@@ -282,6 +302,7 @@ bool wifi_tx::inject_retry(const uint8_t* frame, size_t len)
         release_driver_slot();
         if (err == ESP_ERR_NO_MEM)
         {
+            nomem_.fetch_add(1, std::memory_order_relaxed);
             const int64_t now = esp_timer_get_time();
             if (nomem_start_us == 0)
             {
