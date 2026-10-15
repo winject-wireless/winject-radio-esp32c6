@@ -41,11 +41,15 @@ driver never starts with 11ax. Checked on air (8811AU-decoded rate and frames/s)
 for OFDM_54M, OFDM_24M, OFDM_MCS7_LGI and DSS_1M_L; `radio_tx` takes 3.6 ms
 round trip through the P4, `dropped_wifi` stays 0.
 
-## 3. No firmware update through the P4 (P4 done, C6 untested)
+## 3. No firmware update through the P4 (resolved)
 
-C6 update implemented, not yet tested on hardware. The C6 now runs firmware
-with the OTA server (flashed 2026-10-15 through the P4's `POST /c6/download`),
-so `POST /update/c6` can be tested:
+C6 update over SDIO, tested 2026-10-16 (P4 proxy cf4afeb, C6 v1.0.0 <-> v1.0.1):
+`POST /update/c6` with a 957 KB image takes 2.7 s (6.4 s into the slot that
+already held an image), and the C6 answers with the new version. Checked: the
+new image survives a reset (confirmed); random bytes and a truncated image are
+rejected (`ESP_ERR_OTA_VALIDATE_FAILED`) and the running image stays; updates
+in both directions, so both slots were written. Not tested: a valid image that
+never answers the P4 (the rollback path).
 
 - SDIO plane 3 (`components/sdio_msg/include/sdio_ota.h`): BEGIN / DATA /
   END / ABORT, one request per reply, safe retries by offset.
