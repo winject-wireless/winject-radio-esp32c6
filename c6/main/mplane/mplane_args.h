@@ -11,7 +11,7 @@ bool mplane_parse_uint(const char* text, unsigned long min, unsigned long max,
 bool mplane_parse_int(const char* text, long min, long max, long* out);
 // true/false, 1/0, on/off, yes/no (case-insensitive).
 bool mplane_parse_bool(const char* text, bool* out);
-// Dotted quad only (no DNS: handlers run on the reactor task).
+// Dotted quad only (no DNS: handlers run on the m-plane and console tasks).
 bool mplane_parse_ipv4(const char* text, uint32_t* out);
 // a.b.c.d/<0-32>; has_prefix=false when the /prefix suffix is absent.
 bool mplane_parse_ipv4_prefix(const char* text, uint32_t* ip, uint8_t* prefix,
