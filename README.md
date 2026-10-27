@@ -43,14 +43,21 @@ test/winject_host/                Host unit tests carried over from winject-radi
 
 ## Build and flash
 
-Native ESP-IDF v5.5 (`. ~/esp/esp-idf-v5.5.5/export.sh`). On the Waveshare kit the P4's USB-UART is the Type-C "UART" port; the C6's UART0 is on the P2 header (a 3.3 V USB-UART adapter).
+Native ESP-IDF v5.5 (`. ~/esp/esp-idf-v5.5.5/export.sh`). Normal updates go over SDIO (`POST /update/c6`); a UART flash needs the C6's UART0 and boot strap, which each board wires differently:
+
+| Board | C6 `U0RXD` / `U0TXD` | C6 `GPIO9` (boot) | UART flash |
+|---|---|---|---|
+| Waveshare ESP32-P4-WIFI6-DEV-KIT (rover) | P4 GPIO33 / GPIO32 | P4 GPIO22 | rover-ground-esp32p4's `tools/c6-uart-bridge`, Waveshare build (`sdkconfig.defaults.waveshare`), on the board's USB-UART |
+| Guition JC-ESP32P4-M3-DEV (ground) | P4 GPIO32 / GPIO33 (JP1 20 / 22) | P4 GPIO45 (JP1 24) | rover-ground-esp32p4's `tools/c6-uart-bridge` on the CH340 port |
+
+With the bridge on the P4, the C6 is in its ROM downloader on `<C6 UART>` = the P4's USB-UART at 115200.
 
 ```bash
 # C6: enter the ROM downloader with `curl -X POST http://<P4 IP>/c6/download` (the P4
 # holds the C6's GPIO9 strap low; works with no bootable image) or by sending "dl" on
 # its UART (running firmware only), then
 cd c6 && idf.py build && cd build && \
-  python -m esptool --chip esp32c6 -p /dev/ttyACM1 --before no_reset --after no_reset write_flash @flash_args
+  python -m esptool --chip esp32c6 -p <C6 UART> --before no_reset --after no_reset write_flash @flash_args
 # and boot it: curl -X POST http://<P4 IP>/c6/reset
 ```
 
@@ -77,6 +84,7 @@ The P4 resets the C6 at boot, gets an address by DHCP (hostname `winject-esp32c6
 | `test_ether_*` | `NOK ENOTSUP` |
 | Firmware update | HTTP on the P4 (`POST /update/c6`, `/update/p4`), two slots + rollback on both chips; `POST /c6/download` (P4 holds GPIO9 low) or UART `dl`, then esptool, for the first flash. `reset mode=OTA` boots with the radio off |
 | Cores | One core: WiFi driver (23) > `wifi_tx` (20) > SDIO receive (19) > d-plane forward (17) > m-plane (5) |
+| CCA | On by default (`config_types.h`) and must stay on: listen-before-talk is a regulatory requirement. On this chip `cca=0` also stops reception (measured 2026-10-27: the rover received no frames with it off), so never set `radio.cca = 0` or `radio_tx cca=0` |
 | Rate setting | The C6 driver ignores `esp_wifi_config_80211_tx_rate` (returns OK, rate unchanged); the firmware uses `esp_wifi_config_80211_tx` (phy mode + rate), which applies while running |
 | A-MPDU | The C6's rx_ctrl has no A-MPDU fields, so multi-subframe A-MPDUs are not dropped (winject never sends them) |
 | LEDs | None (the WT32 LED pins are the C6's UART) |
