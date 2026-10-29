@@ -47,8 +47,8 @@ Native ESP-IDF v5.5 (`. ~/esp/esp-idf-v5.5.5/export.sh`). Normal updates go over
 
 | Board | C6 `U0RXD` / `U0TXD` | C6 `GPIO9` (boot) | UART flash |
 |---|---|---|---|
-| Waveshare ESP32-P4-WIFI6-DEV-KIT (rover) | P4 GPIO33 / GPIO32 | P4 GPIO22 | rover-ground-esp32p4's `tools/c6-uart-bridge`, Waveshare build (`sdkconfig.defaults.waveshare`), on the board's USB-UART |
-| Guition JC-ESP32P4-M3-DEV (ground) | P4 GPIO32 / GPIO33 (JP1 20 / 22) | P4 GPIO45 (JP1 24) | rover-ground-esp32p4's `tools/c6-uart-bridge` on the CH340 port |
+| Waveshare ESP32-P4-WIFI6-DEV-KIT (rover) | P4 GPIO33 / GPIO32 | P4 GPIO22 | gnd-esp32p4's `tools/c6-uart-bridge`, Waveshare build (`sdkconfig.defaults.waveshare`), on the board's USB-UART |
+| Guition JC-ESP32P4-M3-DEV (ground) | P4 GPIO32 / GPIO33 (JP1 20 / 22) | P4 GPIO45 (JP1 24) | gnd-esp32p4's `tools/c6-uart-bridge` on the CH340 port |
 
 With the bridge on the P4, the C6 is in its ROM downloader on `<C6 UART>` = the P4's USB-UART at 115200.
 
@@ -61,7 +61,7 @@ cd c6 && idf.py build && cd build && \
 # and boot it: curl -X POST http://<P4 IP>/c6/reset
 ```
 
-The P4 side (proxy image, or an app that includes it such as rover-remote-esp32p4) is built from [winject-radio-esp32-sdio-proxy](https://github.com/winject-wireless/winject-radio-esp32-sdio-proxy).
+The P4 side (proxy image, or an app that includes it such as rov-esp32p4) is built from [winject-radio-esp32-sdio-proxy](https://github.com/winject-wireless/winject-radio-esp32-sdio-proxy).
 
 After that, update both over HTTP through the P4 (raw image as the body); each keeps its previous image until the new one proves itself:
 
