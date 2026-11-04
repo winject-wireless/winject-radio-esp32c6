@@ -38,6 +38,34 @@ struct radio_patch
     std::optional<bool> cca_enabled;
 };
 
+// Per-board TX power calibration: one curve per rate group, mapping the
+// normalized tx_power (dBm) to the radio's own power control value ("drv").
+// Points are joined by straight lines; see the radio's tx_power_map.h.
+constexpr size_t k_radio_tx_cal_points_max = 12;
+
+struct radio_tx_cal_point
+{
+    uint8_t drv = 0;
+    int16_t dbm_x100 = 0;
+};
+
+struct radio_tx_cal_curve
+{
+    const char* group = nullptr;  // e.g. "dsss", "ofdm"
+    uint8_t n = 0;
+    radio_tx_cal_point p[k_radio_tx_cal_points_max];
+    bool is_default = true;       // built-in curve (nothing stored for it)
+};
+
+// reset without group: every group back to its built-in curve. reset with
+// group: that group. Otherwise group's curve is replaced by `curve`.
+struct radio_tx_cal_patch
+{
+    const char* group = nullptr;
+    bool reset = false;
+    radio_tx_cal_curve curve;
+};
+
 struct rx_test_stats
 {
     uint64_t pkt = 0;
@@ -144,7 +172,32 @@ public:
     virtual radio_caps caps() const = 0;
     // false until a frame has been received.
     virtual bool rx_rssi(int8_t* dbm) const = 0;
+    // TX power in force after the last apply, normalized dBm (the radio's own
+    // read-back; may differ from the request when it is out of range). false
+    // when the radio cannot read it back (the radio_tx line then omits it).
+    virtual bool tx_power_applied_dbm(int8_t* dbm) const
+    {
+        (void)dbm;
+        return false;
+    }
     virtual mplane_status set_radio(const radio_patch& patch) = 0;
+    // TX power calibration groups (0 = not calibratable); set applies it at
+    // once and stores it on the board.
+    virtual size_t tx_cal_groups() const
+    {
+        return 0;
+    }
+    virtual mplane_status tx_cal(size_t index, radio_tx_cal_curve* out) const
+    {
+        (void)index;
+        (void)out;
+        return mplane_status::unsupported;
+    }
+    virtual mplane_status set_tx_cal(const radio_tx_cal_patch& patch)
+    {
+        (void)patch;
+        return mplane_status::unsupported;
+    }
 
     virtual mac_filter rx_filter_addr3() const = 0;
     virtual mplane_status set_rx_filter_addr3(const mac_filter& filter) = 0;

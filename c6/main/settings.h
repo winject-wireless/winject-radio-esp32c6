@@ -45,6 +45,13 @@ public:
     read_result read_slot(uint8_t slot, settings_snapshot* out);
     bool set_current_slot(uint8_t slot);
 
+    // Per-board TX power calibration (key "txcal", independent of the slots).
+    // missing = never set (defaults apply).
+    read_result read_tx_cal(tx_power_map::cal* out);
+    bool save_tx_cal(const tx_power_map::cal& cal);
+    // Back to the built-in defaults.
+    bool erase_tx_cal();
+
 private:
     settings();
 

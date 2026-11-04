@@ -396,3 +396,48 @@ TEST(SettingsBlobTest, V9UnpackRejectsLegacySizedV6)
     settings_snapshot out;
     EXPECT_FALSE(settings_blob_unpack(buf, sizeof(buf), &out));
 }
+
+TEST(SettingsBlobTest, TxCalRoundTrip)
+{
+    tx_power_map::cal cal = tx_power_map::default_cal();
+    tx_power_map::curve& c = cal.c[static_cast<size_t>(tx_power_map::rate_class::dsss)];
+    c.n = 4;
+    c.p[0] = {8, -2800};
+    c.p[1] = {66, 260};
+    c.p[2] = {72, 950};
+    c.p[3] = {84, 1560};
+    uint8_t buf[k_tx_cal_blob_max];
+    const size_t len = tx_cal_blob_pack(cal, buf, sizeof(buf));
+    ASSERT_GT(len, 0u);
+    tx_power_map::cal back;
+    ASSERT_TRUE(tx_cal_blob_unpack(buf, len, &back));
+    for (size_t i = 0; i < tx_power_map::k_classes; i++)
+    {
+        EXPECT_TRUE(tx_power_map::curves_equal(back.c[i], cal.c[i])) << i;
+    }
+}
+
+TEST(SettingsBlobTest, TxCalRejectsBadBlobs)
+{
+    const tx_power_map::cal cal = tx_power_map::default_cal();
+    uint8_t buf[k_tx_cal_blob_max + 1] = {};
+    const size_t len = tx_cal_blob_pack(cal, buf, sizeof(buf));
+    ASSERT_GT(len, 0u);
+    EXPECT_EQ(tx_cal_blob_pack(cal, buf, len - 1), 0u);
+    tx_power_map::cal out;
+    EXPECT_FALSE(tx_cal_blob_unpack(buf, len + 1, &out));  // trailing byte
+    EXPECT_FALSE(tx_cal_blob_unpack(buf, len - 1, &out));  // truncated
+    uint8_t bad[k_tx_cal_blob_max];
+    memcpy(bad, buf, len);
+    bad[0] = 1;                                             // old version
+    EXPECT_FALSE(tx_cal_blob_unpack(bad, len, &out));
+    memcpy(bad, buf, len);
+    bad[1] = 4;                                             // class count
+    EXPECT_FALSE(tx_cal_blob_unpack(bad, len, &out));
+    memcpy(bad, buf, len);
+    bad[3] = 90;                                            // first q > 88
+    EXPECT_FALSE(tx_cal_blob_unpack(bad, len, &out));
+    tx_power_map::cal invalid = cal;
+    invalid.c[0].n = 1;
+    EXPECT_EQ(tx_cal_blob_pack(invalid, buf, sizeof(buf)), 0u);
+}

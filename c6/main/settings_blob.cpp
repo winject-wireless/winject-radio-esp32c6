@@ -251,3 +251,68 @@ bool settings_blob_unpack_legacy(const uint8_t* buf, size_t len,
     *inout = snap;
     return true;
 }
+
+size_t tx_cal_blob_pack(const tx_power_map::cal& cal, uint8_t* buf, size_t cap)
+{
+    size_t len = 2;
+    for (const tx_power_map::curve& c : cal.c)
+    {
+        len += 1 + c.n * 3u;
+    }
+    if (buf == nullptr || cap < len || !tx_power_map::cal_valid(cal))
+    {
+        return 0;
+    }
+    blob_writer w(buf);
+    w.u8(k_tx_cal_blob_version);
+    w.u8(static_cast<uint8_t>(tx_power_map::k_classes));
+    for (const tx_power_map::curve& c : cal.c)
+    {
+        w.u8(c.n);
+        for (size_t i = 0; i < c.n; i++)
+        {
+            w.u8(c.p[i].q);
+            w.u16(static_cast<uint16_t>(c.p[i].dbm_x100));
+        }
+    }
+    return len;
+}
+
+bool tx_cal_blob_unpack(const uint8_t* buf, size_t len, tx_power_map::cal* out)
+{
+    if (buf == nullptr || out == nullptr)
+    {
+        return false;
+    }
+    blob_reader r(buf, len);
+    uint8_t version = 0;
+    uint8_t classes = 0;
+    if (!r.u8(&version) || version != k_tx_cal_blob_version || !r.u8(&classes) ||
+        classes != tx_power_map::k_classes)
+    {
+        return false;
+    }
+    tx_power_map::cal cal;
+    for (tx_power_map::curve& c : cal.c)
+    {
+        if (!r.u8(&c.n) || c.n > tx_power_map::k_max_points)
+        {
+            return false;
+        }
+        for (size_t i = 0; i < c.n; i++)
+        {
+            uint16_t dbm = 0;
+            if (!r.u8(&c.p[i].q) || !r.u16(&dbm))
+            {
+                return false;
+            }
+            c.p[i].dbm_x100 = static_cast<int16_t>(dbm);
+        }
+    }
+    if (!r.done() || !tx_power_map::cal_valid(cal))
+    {
+        return false;
+    }
+    *out = cal;
+    return true;
+}

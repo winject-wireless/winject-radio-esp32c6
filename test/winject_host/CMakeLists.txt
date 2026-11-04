@@ -56,6 +56,7 @@ add_executable(winject-esp32c6-host-tests
     mplane_version_test.cpp
     settings_blob_test.cpp
     test_run_test.cpp
+    tx_power_map_test.cpp
 )
 target_include_directories(winject-esp32c6-host-tests PRIVATE ${FW_DIR}
                                                       ${FW_DIR}/endpoint)

@@ -6,6 +6,7 @@
 #include "mplane_req_id.h"
 #include "mplane_version.h"
 
+#include <stdio.h>
 #include <string.h>
 #include <strings.h>
 
@@ -112,6 +113,11 @@ const mplane_commands::command mplane_commands::k_commands[] = {
      &mplane_commands::cmd_radio_tx},
     {"radio_tx_info", "rti", "", needs::radio,
      &mplane_commands::cmd_radio_tx_info},
+    {"radio_tx_cal", "rtc",
+     "group=<name> points=<drv:dBm,...> | group=<name> scale=<dB/dB> offset=<dBm> | "
+     "[group=<name>] reset=true",
+     needs::radio,
+     &mplane_commands::cmd_radio_tx_cal},
     {"radio_caps_info", "rci", "", needs::radio,
      &mplane_commands::cmd_radio_caps_info},
     {"rx_filter_addr3", "rf3", "addr=<mac|empty>", needs::radio,
@@ -518,8 +524,18 @@ void mplane_commands::cmd_rx_info(char* args, mplane_reply& reply)
 }
 
 void mplane_commands::print_radio(const char* prefix, const radio_config& cfg,
-                                  mplane_reply& reply)
+                                  mplane_reply& reply) const
 {
+    int8_t applied = 0;
+    if (radio_ != nullptr && radio_->tx_power_applied_dbm(&applied))
+    {
+        reply.print("%sradio_tx channel=%u tx_power=%d modulation=%s cca=%s "
+                    "tx_power_applied=%d\n",
+                    prefix, static_cast<unsigned>(cfg.channel),
+                    static_cast<int>(cfg.tx_power_dbm), cfg.modulation,
+                    bool_name(cfg.cca_enabled), static_cast<int>(applied));
+        return;
+    }
     reply.print("%sradio_tx channel=%u tx_power=%d modulation=%s cca=%s\n",
                 prefix, static_cast<unsigned>(cfg.channel),
                 static_cast<int>(cfg.tx_power_dbm), cfg.modulation,
@@ -579,6 +595,131 @@ void mplane_commands::cmd_radio_tx(char* args, mplane_reply& reply)
         }
     }
     print_radio("OK ", radio_->radio(), reply);
+}
+
+// "-29.30" style text for a fixed-point value.
+static void format_fixed(long v, unsigned decimals, char* out, size_t n)
+{
+    long scale = 1;
+    for (unsigned i = 0; i < decimals; i++)
+    {
+        scale *= 10;
+    }
+    const unsigned long a = static_cast<unsigned long>(v < 0 ? -v : v);
+    snprintf(out, n, "%s%lu.%0*lu", v < 0 ? "-" : "", a / scale, static_cast<int>(decimals),
+             a % scale);
+}
+
+// "8:-29.30,66:2.60,72:9.50": drv:dBm pairs (dBm up to 2 decimals).
+static bool parse_cal_points(char* text, radio_tx_cal_curve* out)
+{
+    out->n = 0;
+    char* save = nullptr;
+    for (char* tok = strtok_r(text, ",", &save); tok != nullptr;
+         tok = strtok_r(nullptr, ",", &save))
+    {
+        char* colon = strchr(tok, ':');
+        if (colon == nullptr || out->n >= k_radio_tx_cal_points_max)
+        {
+            return false;
+        }
+        *colon = '\0';
+        unsigned long drv = 0;
+        long dbm = 0;
+        if (!mplane_parse_uint(tok, 0, 255, &drv) ||
+            !mplane_parse_fixed(colon + 1, 2, -9999, 9999, &dbm))
+        {
+            return false;
+        }
+        out->p[out->n].drv = static_cast<uint8_t>(drv);
+        out->p[out->n].dbm_x100 = static_cast<int16_t>(dbm);
+        out->n++;
+    }
+    return out->n > 0;
+}
+
+void mplane_commands::cmd_radio_tx_cal(char* args, mplane_reply& reply)
+{
+    static const char* const k_keys[] = {"group", "points", "scale", "offset", "reset",
+                                         nullptr};
+    mplane_args kv;
+    if (!parse_args(args, k_keys, &kv))
+    {
+        reply.nok(mplane_status::invalid);
+        return;
+    }
+    if (!kv.empty())
+    {
+        radio_tx_cal_patch patch;
+        patch.group = kv.find("group");
+        char* points = const_cast<char*>(kv.find("points"));
+        long scale = 0;
+        long offset = 0;
+        const mplane_args::status ss = kv.get_fixed("scale", 3, 1, 99999, &scale);
+        const mplane_args::status os = kv.get_fixed("offset", 2, -99999, 99999, &offset);
+        const mplane_args::status rs = kv.get_bool("reset", &patch.reset);
+        const bool line = ss == mplane_args::status::ok && os == mplane_args::status::ok;
+        const bool half_line = (ss == mplane_args::status::absent) !=
+                               (os == mplane_args::status::absent);
+        // Exactly one of: reset, points, scale+offset; a curve needs a group.
+        const int forms = (patch.reset ? 1 : 0) + (points != nullptr ? 1 : 0) + (line ? 1 : 0);
+        if (ss == mplane_args::status::invalid || os == mplane_args::status::invalid ||
+            rs == mplane_args::status::invalid || half_line || forms != 1 ||
+            (!patch.reset && patch.group == nullptr) ||
+            (patch.group != nullptr && *patch.group == '\0'))
+        {
+            reply.nok(mplane_status::invalid);
+            return;
+        }
+        if (points != nullptr && !parse_cal_points(points, &patch.curve))
+        {
+            reply.nok(mplane_status::invalid);
+            return;
+        }
+        if (line)
+        {
+            // out = scale * (drv / 4) + offset, over the driver range 8..88.
+            patch.curve.n = 2;
+            patch.curve.p[0].drv = 8;
+            patch.curve.p[0].dbm_x100 = static_cast<int16_t>(offset + 8 * scale / 40);
+            patch.curve.p[1].drv = 88;
+            patch.curve.p[1].dbm_x100 = static_cast<int16_t>(offset + 88 * scale / 40);
+        }
+        const mplane_status st = radio_->set_tx_cal(patch);
+        if (st != mplane_status::ok)
+        {
+            reply.nok(st);
+            return;
+        }
+    }
+    const size_t groups = radio_->tx_cal_groups();
+    if (groups == 0)
+    {
+        reply.nok(mplane_status::unsupported);
+        return;
+    }
+    for (size_t g = 0; g < groups; g++)
+    {
+        radio_tx_cal_curve c;
+        const mplane_status st = radio_->tx_cal(g, &c);
+        if (st != mplane_status::ok)
+        {
+            reply.nok(st);
+            return;
+        }
+        char pts[k_radio_tx_cal_points_max * 12 + 1] = "";
+        size_t len = 0;
+        for (size_t i = 0; i < c.n && len < sizeof(pts); i++)
+        {
+            char dbm[16];
+            format_fixed(c.p[i].dbm_x100, 2, dbm, sizeof(dbm));
+            len += snprintf(pts + len, sizeof(pts) - len, "%s%u:%s", i ? "," : "",
+                            static_cast<unsigned>(c.p[i].drv), dbm);
+        }
+        reply.print("%sradio_tx_cal group=%s default=%s points=%s\n", g == 0 ? "OK " : "",
+                    c.group, bool_name(c.is_default), pts);
+    }
+    print_radio("", radio_->radio(), reply);
 }
 
 void mplane_commands::cmd_radio_tx_info(char* args, mplane_reply& reply)

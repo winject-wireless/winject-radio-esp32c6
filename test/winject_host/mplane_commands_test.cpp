@@ -189,6 +189,16 @@ public:
         return true;
     }
 
+    bool tx_power_applied_dbm(int8_t* dbm) const override
+    {
+        if (!have_tx_power_readback)
+        {
+            return false;
+        }
+        *dbm = 15;
+        return true;
+    }
+
     radio_caps caps() const override
     {
         return radio_caps{fcs_mode_};
@@ -221,6 +231,42 @@ public:
         return mplane_status::ok;
     }
 
+    size_t tx_cal_groups() const override
+    {
+        return 2;
+    }
+
+    mplane_status tx_cal(size_t index, radio_tx_cal_curve* out) const override
+    {
+        if (index >= 2)
+        {
+            return mplane_status::invalid;
+        }
+        *out = cal_[index];
+        return mplane_status::ok;
+    }
+
+    mplane_status set_tx_cal(const radio_tx_cal_patch& patch) override
+    {
+        last_tx_cal = patch;
+        last_tx_cal_group = patch.group != nullptr ? patch.group : "";
+        ++set_tx_cal_calls;
+        if (patch.group != nullptr && strcmp(patch.group, "dsss") != 0 &&
+            strcmp(patch.group, "ofdm") != 0)
+        {
+            return mplane_status::invalid;
+        }
+        if (!patch.reset)
+        {
+            const size_t i = strcmp(patch.group, "dsss") == 0 ? 0 : 1;
+            const char* g = cal_[i].group;
+            cal_[i] = patch.curve;
+            cal_[i].group = g;
+            cal_[i].is_default = false;
+        }
+        return mplane_status::ok;
+    }
+
     mac_filter rx_filter_addr3() const override
     {
         return filter_;
@@ -238,7 +284,13 @@ public:
     }
 
     bool have_rssi = false;
+    bool have_tx_power_readback = false;
     int set_radio_calls = 0;
+    int set_tx_cal_calls = 0;
+    radio_tx_cal_patch last_tx_cal;
+    std::string last_tx_cal_group;  // patch.group points into the request
+    radio_tx_cal_curve cal_[2] = {{"dsss", 2, {{8, -2930}, {88, 1310}}, true},
+                                  {"ofdm", 2, {{8, -2930}, {88, 1310}}, true}};
     fcs_mode fcs_mode_ = fcs_mode::signal;
     uint32_t tx_dropped_invalid_frame_ = 3;
     uint32_t tx_dropped_tx_queue_ = 4;
@@ -485,7 +537,8 @@ TEST_F(MplaneCommandsTest, RadioTxPartialUpdate)
 TEST_F(MplaneCommandsTest, RadioTxInvalidArgument)
 {
     EXPECT_EQ(run("rt channel=15"), "NOK EINVAL\n");
-    EXPECT_EQ(run("rt tx_power=30"), "NOK EINVAL\n");
+    EXPECT_EQ(run("rt tx_power=31"), "NOK EINVAL\n");
+    EXPECT_EQ(run("rt tx_power=-31"), "NOK EINVAL\n");
     EXPECT_EQ(run("rt cca=maybe"), "NOK EINVAL\n");
     EXPECT_EQ(run("rt modulation="), "NOK EINVAL\n");
     EXPECT_EQ(run("rt modulation=BOGUS"), "NOK EINVAL\n");
@@ -501,6 +554,14 @@ TEST_F(MplaneCommandsTest, RadioTxInfoWithOptionalRssi)
     EXPECT_EQ(run("radio_tx_info"),
               "radio_tx channel=1 tx_power=20 modulation=DSS_1M_L cca=true\n"
               "radio_rx rssi=-42\n");
+    // The read-back is an extra key on the radio_tx line (managers ignore it):
+    // normalized dBm in force, here below the request (radio maximum).
+    radio.have_tx_power_readback = true;
+    EXPECT_EQ(run("radio_tx_info"),
+              "radio_tx channel=1 tx_power=20 modulation=DSS_1M_L cca=true tx_power_applied=15\n"
+              "radio_rx rssi=-42\n");
+    EXPECT_EQ(run("radio_tx tx_power=20"),
+              "OK radio_tx channel=1 tx_power=20 modulation=DSS_1M_L cca=true tx_power_applied=15\n");
 }
 
 TEST_F(MplaneCommandsTest, RadioCapsInfo)
@@ -638,4 +699,66 @@ TEST_F(MplaneCommandsTest, WifiTxStartAndStop)
 
     EXPECT_EQ(run("twt mtu=23 count=1"), "NOK EINVAL\n");
     EXPECT_EQ(run("twt mtu=100"), "NOK EINVAL\n");
+}
+
+TEST_F(MplaneCommandsTest, RadioTxCalListsGroups)
+{
+    EXPECT_EQ(run("radio_tx_cal"),
+              "OK radio_tx_cal group=dsss default=true points=8:-29.30,88:13.10\n"
+              "radio_tx_cal group=ofdm default=true points=8:-29.30,88:13.10\n"
+              "radio_tx channel=1 tx_power=20 modulation=DSS_1M_L cca=true\n");
+    EXPECT_EQ(radio.set_tx_cal_calls, 0);
+}
+
+TEST_F(MplaneCommandsTest, RadioTxCalSetsPoints)
+{
+    EXPECT_EQ(run("rtc group=dsss points=8:-28,66:2.6,72:9.5,84:15.62"),
+              "OK radio_tx_cal group=dsss default=false points=8:-28.00,66:2.60,72:9.50,84:15.62\n"
+              "radio_tx_cal group=ofdm default=true points=8:-29.30,88:13.10\n"
+              "radio_tx channel=1 tx_power=20 modulation=DSS_1M_L cca=true\n");
+    EXPECT_EQ(radio.last_tx_cal_group, "dsss");
+    EXPECT_FALSE(radio.last_tx_cal.reset);
+    EXPECT_EQ(radio.last_tx_cal.curve.n, 4);
+    EXPECT_EQ(radio.last_tx_cal.curve.p[1].drv, 66);
+    EXPECT_EQ(radio.last_tx_cal.curve.p[1].dbm_x100, 260);
+    EXPECT_EQ(radio.last_tx_cal.curve.p[3].dbm_x100, 1562);
+}
+
+TEST_F(MplaneCommandsTest, RadioTxCalScaleOffsetIsALine)
+{
+    EXPECT_EQ(run("rtc group=ofdm scale=2.02 offset=-26.6").substr(0, 3), "OK ");
+    EXPECT_EQ(radio.last_tx_cal.curve.n, 2);
+    EXPECT_EQ(radio.last_tx_cal.curve.p[0].drv, 8);
+    EXPECT_EQ(radio.last_tx_cal.curve.p[0].dbm_x100, -2256);  // -26.6 + 8 * 2.02 / 4
+    EXPECT_EQ(radio.last_tx_cal.curve.p[1].drv, 88);
+    EXPECT_EQ(radio.last_tx_cal.curve.p[1].dbm_x100, 1784);
+}
+
+TEST_F(MplaneCommandsTest, RadioTxCalReset)
+{
+    EXPECT_EQ(run("rtc reset=true").substr(0, 3), "OK ");
+    EXPECT_EQ(radio.last_tx_cal_group, "");
+    EXPECT_TRUE(radio.last_tx_cal.reset);
+    EXPECT_EQ(run("rtc group=ofdm reset=true").substr(0, 3), "OK ");
+    EXPECT_EQ(radio.last_tx_cal_group, "ofdm");
+    EXPECT_TRUE(radio.last_tx_cal.reset);
+}
+
+TEST_F(MplaneCommandsTest, RadioTxCalRejectsBadRequests)
+{
+    EXPECT_EQ(run("rtc points=8:-28,84:15"), "NOK EINVAL\n");                // no group
+    EXPECT_EQ(run("rtc group=dsss"), "NOK EINVAL\n");                        // nothing to set
+    EXPECT_EQ(run("rtc group=dsss scale=2"), "NOK EINVAL\n");                // half a line
+    EXPECT_EQ(run("rtc group=dsss points=8:-28 scale=2 offset=-26"), "NOK EINVAL\n");
+    EXPECT_EQ(run("rtc group=dsss points=8-28,84:15"), "NOK EINVAL\n");      // no colon
+    EXPECT_EQ(run("rtc group=dsss points=8:-28.123,84:15"), "NOK EINVAL\n"); // 3 decimals
+    EXPECT_EQ(run("rtc group=dsss points=300:1,84:15"), "NOK EINVAL\n");     // drv > 255
+    EXPECT_EQ(run("rtc group=dsss points=1:1,2:2,3:3,4:4,5:5,6:6,7:7,8:8,9:9,10:10,11:11,12:12,13:13"),
+              "NOK EINVAL\n");                                               // 13 points
+    EXPECT_EQ(run("rtc group= reset=true"), "NOK EINVAL\n");
+    EXPECT_EQ(run("rtc gain=1"), "NOK EINVAL\n");
+    EXPECT_EQ(radio.set_tx_cal_calls, 0);
+    // The backend owns group names and curve rules.
+    EXPECT_EQ(run("rtc group=bogus points=8:-28,84:15"), "NOK EINVAL\n");
+    EXPECT_EQ(radio.set_tx_cal_calls, 1);
 }

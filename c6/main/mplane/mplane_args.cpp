@@ -115,6 +115,69 @@ bool mplane_parse_int(const char* text, long min, long max, long* out)
     return true;
 }
 
+bool mplane_parse_fixed(const char* text, unsigned decimals, long min, long max,
+                        long* out)
+{
+    if (text == nullptr || out == nullptr || *text == '\0' || decimals > 6)
+    {
+        return false;
+    }
+    const char* p = text;
+    const bool neg = *p == '-';
+    if (*p == '-' || *p == '+')
+    {
+        p++;
+    }
+    long whole = 0;
+    unsigned digits = 0;
+    for (; *p >= '0' && *p <= '9'; p++, digits++)
+    {
+        if (whole > 100000000L)
+        {
+            return false;
+        }
+        whole = whole * 10 + (*p - '0');
+    }
+    long frac = 0;
+    unsigned frac_digits = 0;
+    if (*p == '.')
+    {
+        p++;
+        for (; *p >= '0' && *p <= '9'; p++, frac_digits++)
+        {
+            if (frac_digits >= decimals)
+            {
+                return false;
+            }
+            frac = frac * 10 + (*p - '0');
+        }
+    }
+    if (*p != '\0' || digits + frac_digits == 0)
+    {
+        return false;
+    }
+    long scale = 1;
+    for (unsigned i = 0; i < decimals; i++)
+    {
+        scale *= 10;
+    }
+    for (unsigned i = frac_digits; i < decimals; i++)
+    {
+        frac *= 10;
+    }
+    long v = whole * scale + frac;
+    if (neg)
+    {
+        v = -v;
+    }
+    if (v < min || v > max)
+    {
+        return false;
+    }
+    *out = v;
+    return true;
+}
+
 bool mplane_parse_bool(const char* text, bool* out)
 {
     if (text == nullptr || out == nullptr)
@@ -336,6 +399,17 @@ mplane_args::status mplane_args::get_int(const char* key, long min, long max,
         return status::absent;
     }
     return mplane_parse_int(v, min, max, out) ? status::ok : status::invalid;
+}
+
+mplane_args::status mplane_args::get_fixed(const char* key, unsigned decimals, long min,
+                                           long max, long* out) const
+{
+    const char* v = find(key);
+    if (v == nullptr)
+    {
+        return status::absent;
+    }
+    return mplane_parse_fixed(v, decimals, min, max, out) ? status::ok : status::invalid;
 }
 
 mplane_args::status mplane_args::get_bool(const char* key, bool* out) const

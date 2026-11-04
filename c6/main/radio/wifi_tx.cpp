@@ -2,6 +2,7 @@
 
 #include "config.h"
 #include "packet.h"
+#include "tx_power_map.h"
 #include "wifi.h"
 
 #include <utility>
@@ -17,6 +18,27 @@
 static const char* TAG = "wifi_tx";
 
 static constexpr int64_t k_fail_log_interval_us = 1000000;
+
+// Undocumented libphy / libpp internals of the C6 WiFi blobs (IDF 5.5.5),
+// signatures read from the disassembly. Used only for the boost level above
+// the public API's 84 (0.25 dBm) cap; recheck them on any IDF upgrade.
+//  - phy_set_most_tpw: libphy's maximum TX power (phy_param[6]); rebuilds
+//    the TX gain table from it. esp_wifi_set_max_tx_power ends here, capped 84.
+//  - hal_get/set_tx_pwr: libpp's per-rate power table (43 entries) that the
+//    MAC uses per frame; hal_init_tx_pwr fills it via get_target_pwr, which
+//    clamps every rate to 84. hal_get_tx_pwr maps rate codes > 25 to index
+//    code - 10; hal_set_tx_pwr takes the raw index.
+extern "C" void phy_set_most_tpw(int8_t qdbm);
+extern "C" int8_t hal_get_tx_pwr(uint32_t rate);
+extern "C" void hal_set_tx_pwr(uint32_t index, int8_t qdbm);
+extern "C" uint8_t phy_param[];
+
+static constexpr uint32_t k_hal_tx_pwr_entries = 43;
+
+static int8_t hal_tx_pwr_at(uint32_t index)
+{
+    return hal_get_tx_pwr(index < 26 ? index : index + 10);
+}
 
 extern "C" int ieee80211_raw_frame_sanity_check(int32_t, int32_t, uint32_t,
                                                 uint32_t)
@@ -44,33 +66,137 @@ bool wifi_tx::cca_enabled() const
     return cca_enabled_;
 }
 
+static tx_power_map::rate_class rate_class_for(wifi_phy_rate_t rate)
+{
+    using tx_power_map::rate_class;
+    switch (rate)
+    {
+    case WIFI_PHY_RATE_1M_L:
+    case WIFI_PHY_RATE_2M_L:
+    case WIFI_PHY_RATE_2M_S:
+        return rate_class::dsss;
+    case WIFI_PHY_RATE_5M_L:
+    case WIFI_PHY_RATE_5M_S:
+    case WIFI_PHY_RATE_11M_L:
+    case WIFI_PHY_RATE_11M_S:
+        return rate_class::cck;
+    case WIFI_PHY_RATE_6M:
+    case WIFI_PHY_RATE_9M:
+    case WIFI_PHY_RATE_12M:
+    case WIFI_PHY_RATE_18M:
+    case WIFI_PHY_RATE_MCS0_LGI:
+    case WIFI_PHY_RATE_MCS1_LGI:
+    case WIFI_PHY_RATE_MCS2_LGI:
+    case WIFI_PHY_RATE_MCS0_SGI:
+    case WIFI_PHY_RATE_MCS1_SGI:
+    case WIFI_PHY_RATE_MCS2_SGI:
+        return rate_class::ofdm_low;
+    case WIFI_PHY_RATE_48M:
+    case WIFI_PHY_RATE_54M:
+    case WIFI_PHY_RATE_MCS5_LGI:
+    case WIFI_PHY_RATE_MCS6_LGI:
+    case WIFI_PHY_RATE_MCS7_LGI:
+    case WIFI_PHY_RATE_MCS5_SGI:
+    case WIFI_PHY_RATE_MCS6_SGI:
+    case WIFI_PHY_RATE_MCS7_SGI:
+        return rate_class::ofdm_64qam;
+    default:
+        return rate_class::ofdm_mid;
+    }
+}
+
+// tx_power_dbm is normalized: dBm at the antenna connector. The calibration
+// curve of the current rate group (tx_power_map) turns it into the nearest
+// driver value the C6 can do, and the applied value back into dBm.
+//
+// Up to 84 the public API sets it (esp_wifi_set_max_tx_power, which also
+// rebuilds libpp's per-rate table). Above (the boost, up to 88) libphy's
+// maximum and every per-rate entry sitting at the 84 cap are raised directly;
+// rates the PHY init data keeps lower (64-QAM) stay where they are. Channel
+// and protocol changes rebuild the table, so they call apply_power again.
+// The country is set once before esp_wifi_start (wifi::initialize).
 bool wifi_tx::apply_power()
 {
-    esp_err_t err = radio.apply_country();
+    const wifi_phy_rate_t rate = radio.phy_rate();
+    const tx_power_map::rate_class cls = rate_class_for(rate);
+    const int q_max = (rate == WIFI_PHY_RATE_48M || rate == WIFI_PHY_RATE_54M)
+                          ? tx_power_map::k_qdbm_legacy_64qam_max
+                          : tx_power_map::k_qdbm_max;
+    const tx_power_map::curve& curve = cal_.c[static_cast<size_t>(cls)];
+    const int q = tx_power_map::qdbm_for_dbm(tx_power_dbm, curve, q_max);
+    const int q_api = q < tx_power_map::k_qdbm_api_max ? q : tx_power_map::k_qdbm_api_max;
+
+    esp_err_t err = esp_wifi_set_max_tx_power(static_cast<int8_t>(q_api));
     if (err != ESP_OK)
     {
-        ESP_LOGE(TAG, "set_country failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "set_max_tx_power %d failed: %s", q_api, esp_err_to_name(err));
         return false;
     }
 
-    int8_t dbm = tx_power_dbm;
-    const wifi_phy_rate_t rate = radio.phy_rate();
-    if (rate == WIFI_PHY_RATE_48M || rate == WIFI_PHY_RATE_54M)
+    int8_t applied = 0;
+    if (q > tx_power_map::k_qdbm_api_max)
     {
-        if (dbm > WIFI_TX_POWER_64QAM_LEGACY_MAX_DBM)
+        phy_set_most_tpw(static_cast<int8_t>(q));
+        unsigned raised = 0;
+        for (uint32_t i = 0; i < k_hal_tx_pwr_entries; i++)
         {
-            dbm = WIFI_TX_POWER_64QAM_LEGACY_MAX_DBM;
+            if (hal_tx_pwr_at(i) >= tx_power_map::k_qdbm_api_max)
+            {
+                hal_set_tx_pwr(i, static_cast<int8_t>(q));
+                raised++;
+            }
+        }
+        applied = static_cast<int8_t>(phy_param[6]);
+        ESP_LOGI(TAG, "tx_power %d dBm: boost %d, %u rate entries raised", tx_power_dbm, q,
+                 raised);
+    }
+    else
+    {
+        err = esp_wifi_get_max_tx_power(&applied);
+        if (err != ESP_OK)
+        {
+            ESP_LOGW(TAG, "get_max_tx_power failed: %s", esp_err_to_name(err));
+            applied_dbm_.store(INT8_MIN, std::memory_order_relaxed);
+            return true;
         }
     }
+    const int dbm = tx_power_map::dbm_for_qdbm(applied, curve);
+    applied_dbm_.store(static_cast<int8_t>(dbm), std::memory_order_relaxed);
+    ESP_LOGI(TAG, "tx_power %d dBm requested: driver %d (set %d) -> %d dBm", tx_power_dbm,
+             applied, q, dbm);
+    return true;
+}
 
-    const int8_t quarter_dbm = static_cast<int8_t>(dbm * 4);
-    err = esp_wifi_set_max_tx_power(quarter_dbm);
-    if (err != ESP_OK)
+tx_power_map::cal wifi_tx::tx_cal() const
+{
+    return cal_;
+}
+
+bool wifi_tx::set_tx_cal(const tx_power_map::cal& cal, bool apply)
+{
+    if (!tx_power_map::cal_valid(cal))
     {
-        ESP_LOGE(TAG, "set_max_tx_power %d dBm failed: %s", dbm,
-                 esp_err_to_name(err));
         return false;
     }
+    const tx_power_map::cal previous = cal_;
+    cal_ = cal;
+    if (apply && !apply_power())
+    {
+        cal_ = previous;
+        apply_power();
+        return false;
+    }
+    return true;
+}
+
+bool wifi_tx::applied_dbm(int8_t* out) const
+{
+    const int8_t v = applied_dbm_.load(std::memory_order_relaxed);
+    if (v == INT8_MIN || out == nullptr)
+    {
+        return false;
+    }
+    *out = v;
     return true;
 }
 
