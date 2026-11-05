@@ -88,6 +88,21 @@ static bool start_radio(const settings_snapshot& boot)
         ESP_LOGE(TAG, "wifi radio init failed");
         return false;
     }
+    // Per-board TX power calibration (NVS "txcal"); needs the radio lock, so
+    // after initialize. Applied before the boot radio config below.
+    tx_power_map::cal cal;
+    const settings::read_result cal_rr = settings::instance().read_tx_cal(&cal);
+    if (cal_rr == settings::read_result::ok)
+    {
+        if (radio.set_tx_cal(cal))
+        {
+            ESP_LOGI(TAG, "tx_cal: calibration curves from NVS");
+        }
+        else
+        {
+            ESP_LOGE(TAG, "tx_cal: stored calibration not applied");
+        }
+    }
     if (!frameBegin())
     {
         ESP_LOGE(TAG, "802.11 frame init failed");

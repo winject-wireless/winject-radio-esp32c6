@@ -97,11 +97,12 @@
 #define WIFI_DEFAULT_CHANNEL 1
 #define WIFI_DEFAULT_MODULATION "DSS_1M_L"
 #define WIFI_DEFAULT_TX_POWER_DBM 20
-#define WIFI_TX_POWER_DBM_MIN 2
-#define WIFI_TX_POWER_DBM_MAX 20
-// Legacy 64-QAM (48M/54M) raw inject clips above this; peer promisc RX fails
-// while USB monitor still looks fine at 20 dBm.
-#define WIFI_TX_POWER_64QAM_LEGACY_MAX_DBM 13
+// tx_power is normalized: dBm at the antenna connector. Requests in this range
+// are accepted; the radio applies the nearest level it can (C6: about -25 to
+// +15 dBm, rate dependent, radio/tx_power_map.h) and reports it as
+// tx_power_applied. The default asks for the maximum.
+#define WIFI_TX_POWER_DBM_MIN (-30)
+#define WIFI_TX_POWER_DBM_MAX 30
 
 #define WIFI_HDR_LEN 24
 // Winject Addr3 prefix (manager domain encoding); not used as an RX filter

@@ -69,6 +69,7 @@ private:
     void cmd_radio_tx(char* args, mplane_reply& reply);
     void cmd_radio_tx_info(char* args, mplane_reply& reply);
     void cmd_radio_caps_info(char* args, mplane_reply& reply);
+    void cmd_radio_tx_cal(char* args, mplane_reply& reply);
     void cmd_rx_filter_addr3(char* args, mplane_reply& reply);
     void cmd_test_ether_rx(char* args, mplane_reply& reply);
     void cmd_test_ether_tx(char* args, mplane_reply& reply);
@@ -80,8 +81,11 @@ private:
     void handle_tune(char* args, const char* name, const tune_field* fields,
                      size_t field_count, mplane_reply& reply);
     void handle_slot(char* args, bool save, mplane_reply& reply);
-    static void print_radio(const char* prefix, const radio_config& cfg,
-                            mplane_reply& reply);
+    // radio_tx line; tx_power is the request, tx_power_applied=<dBm> (appended
+    // when the radio reads its TX power back) what is in force. Both are
+    // normalized dBm; managers ignore unknown keys on this line.
+    void print_radio(const char* prefix, const radio_config& cfg,
+                     mplane_reply& reply) const;
     static void print_stats(const char* name, const rx_test_stats& stats,
                             bool with_fec, mplane_reply& reply);
     static bool parse_clear(char* args, bool* clear);

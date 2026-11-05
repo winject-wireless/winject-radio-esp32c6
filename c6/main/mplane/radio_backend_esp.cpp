@@ -1,9 +1,12 @@
 #include "radio_backend_esp.h"
 
 #include "sdio_endpoint.h"
+#include "settings.h"
 #include "wifi.h"
 
 #include "esp_log.h"
+
+#include <string.h>
 
 static const char* TAG = "radio_mplane";
 
@@ -99,6 +102,11 @@ bool radio_backend_esp::rx_rssi(int8_t* dbm) const
     return radio_.rx().last_rssi(dbm);
 }
 
+bool radio_backend_esp::tx_power_applied_dbm(int8_t* dbm) const
+{
+    return radio_.tx().applied_dbm(dbm);
+}
+
 mplane_status radio_backend_esp::set_radio(const radio_patch& patch)
 {
     if (!radio_.ready())
@@ -184,4 +192,100 @@ mplane_status radio_backend_esp::set_rx_filter_addr3(const mac_filter& filter)
 const char* radio_backend_esp::modulation_list() const
 {
     return wifi::modulation_list();
+}
+
+size_t radio_backend_esp::tx_cal_groups() const
+{
+    return tx_power_map::k_classes;
+}
+
+mplane_status radio_backend_esp::tx_cal(size_t index, radio_tx_cal_curve* out) const
+{
+    tx_power_map::cal cal;
+    if (out == nullptr || index >= tx_power_map::k_classes)
+    {
+        return mplane_status::invalid;
+    }
+    if (!radio_.tx_cal(&cal))
+    {
+        return mplane_status::io_error;
+    }
+    const auto cls = static_cast<tx_power_map::rate_class>(index);
+    const tx_power_map::curve& c = cal.c[index];
+    out->group = tx_power_map::class_name(cls);
+    out->n = c.n;
+    for (size_t i = 0; i < c.n; i++)
+    {
+        out->p[i].drv = c.p[i].q;
+        out->p[i].dbm_x100 = c.p[i].dbm_x100;
+    }
+    out->is_default = tx_power_map::curve_is_default(c, cls);
+    return mplane_status::ok;
+}
+
+mplane_status radio_backend_esp::set_tx_cal(const radio_tx_cal_patch& patch)
+{
+    tx_power_map::cal cal;
+    if (!radio_.tx_cal(&cal))
+    {
+        return mplane_status::io_error;
+    }
+    size_t index = tx_power_map::k_classes;
+    if (patch.group != nullptr)
+    {
+        for (size_t i = 0; i < tx_power_map::k_classes; i++)
+        {
+            if (strcmp(patch.group, tx_power_map::class_name(
+                                        static_cast<tx_power_map::rate_class>(i))) == 0)
+            {
+                index = i;
+            }
+        }
+        if (index == tx_power_map::k_classes)
+        {
+            return mplane_status::invalid;
+        }
+    }
+    if (patch.reset && patch.group == nullptr)
+    {
+        cal = tx_power_map::default_cal();
+    }
+    else if (patch.reset)
+    {
+        cal.c[index] = tx_power_map::default_curve(static_cast<tx_power_map::rate_class>(index));
+    }
+    else
+    {
+        if (patch.group == nullptr || patch.curve.n > tx_power_map::k_max_points)
+        {
+            return mplane_status::invalid;
+        }
+        tx_power_map::curve c;
+        c.n = patch.curve.n;
+        for (size_t i = 0; i < c.n; i++)
+        {
+            c.p[i].q = patch.curve.p[i].drv;
+            c.p[i].dbm_x100 = patch.curve.p[i].dbm_x100;
+        }
+        if (!tx_power_map::curve_valid(c))
+        {
+            return mplane_status::invalid;
+        }
+        cal.c[index] = c;
+    }
+    if (!radio_.set_tx_cal(cal))
+    {
+        return mplane_status::io_error;
+    }
+    settings& store = settings::instance();
+    const bool stored = tx_power_map::cal_is_default(cal) ? store.erase_tx_cal()
+                                                           : store.save_tx_cal(cal);
+    if (!stored)
+    {
+        ESP_LOGW(TAG, "tx_cal applied but not stored");
+        return mplane_status::io_error;
+    }
+    ESP_LOGI(TAG, "tx_cal %s %s", patch.group != nullptr ? patch.group : "all",
+             patch.reset ? "reset" : "set");
+    return mplane_status::ok;
 }

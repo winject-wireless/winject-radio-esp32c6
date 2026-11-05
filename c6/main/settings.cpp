@@ -353,3 +353,75 @@ bool settings::set_current_slot(uint8_t slot)
     current_slot_ = slot;
     return true;
 }
+
+static const char* k_tx_cal_key = "txcal";
+
+settings::read_result settings::read_tx_cal(tx_power_map::cal* out)
+{
+    if (out == nullptr)
+    {
+        return read_result::invalid;
+    }
+    const nvs_session nvs(false);
+    if (!nvs.ok())
+    {
+        return read_result::missing;
+    }
+    uint8_t blob[k_tx_cal_blob_max + 1];
+    size_t len = sizeof(blob);
+    const esp_err_t err = nvs_get_blob(nvs.get(), k_tx_cal_key, blob, &len);
+    if (err == ESP_ERR_NVS_NOT_FOUND)
+    {
+        return read_result::missing;
+    }
+    if (err != ESP_OK && err != ESP_ERR_NVS_INVALID_LENGTH)
+    {
+        ESP_LOGE(TAG, "txcal read failed: %s", esp_err_to_name(err));
+        return read_result::io_error;
+    }
+    if (err != ESP_OK || !tx_cal_blob_unpack(blob, len, out))
+    {
+        ESP_LOGW(TAG, "txcal: invalid blob (%u bytes), using defaults",
+                 static_cast<unsigned>(len));
+        return read_result::invalid;
+    }
+    return read_result::ok;
+}
+
+bool settings::save_tx_cal(const tx_power_map::cal& cal)
+{
+    uint8_t blob[k_tx_cal_blob_max];
+    const size_t len = tx_cal_blob_pack(cal, blob, sizeof(blob));
+    if (len == 0)
+    {
+        return false;
+    }
+    const nvs_session nvs(true);
+    if (!nvs.ok())
+    {
+        return false;
+    }
+    const esp_err_t err = nvs_set_blob(nvs.get(), k_tx_cal_key, blob, len);
+    if (err != ESP_OK)
+    {
+        ESP_LOGE(TAG, "txcal save failed: %s", esp_err_to_name(err));
+        return false;
+    }
+    return commit(nvs, k_tx_cal_key);
+}
+
+bool settings::erase_tx_cal()
+{
+    const nvs_session nvs(true);
+    if (!nvs.ok())
+    {
+        return false;
+    }
+    const esp_err_t err = nvs_erase_key(nvs.get(), k_tx_cal_key);
+    if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND)
+    {
+        ESP_LOGE(TAG, "txcal erase failed: %s", esp_err_to_name(err));
+        return false;
+    }
+    return commit(nvs, k_tx_cal_key);
+}

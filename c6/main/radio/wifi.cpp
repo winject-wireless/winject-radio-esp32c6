@@ -175,18 +175,14 @@ void wifi::init_activity_leds()
     }
 }
 
+// Called once, before esp_wifi_start. IDF discourages esp_wifi_set_country
+// (it skips the per-country rules); esp_wifi_set_country_code applies them.
+// JP includes 2484 MHz (channel 14). Fall back to world-safe "01"
+// (channels 1–13) if the radio rejects JP — never abort boot on this.
+// ieee80211d off = manual policy: no AP may change it.
 esp_err_t wifi::apply_country()
 {
-    wifi_country_t country = {};
-    country.max_tx_power = static_cast<int8_t>(tx_.power_dbm() * 4);
-    country.policy = WIFI_COUNTRY_POLICY_MANUAL;
-
-    // JP PHY includes 2484 MHz (channel 14). Fall back to world-safe "01"
-    // (channels 1–13) if the radio rejects JP — never abort boot on this.
-    memcpy(country.cc, "JP", 2);
-    country.schan = WIFI_CHANNEL_MIN;
-    country.nchan = WIFI_CHANNEL_MAX - WIFI_CHANNEL_MIN + 1;
-    esp_err_t err = esp_wifi_set_country(&country);
+    esp_err_t err = esp_wifi_set_country_code("JP", false);
     if (err == ESP_OK)
     {
         return ESP_OK;
@@ -194,10 +190,7 @@ esp_err_t wifi::apply_country()
 
     ESP_LOGW(TAG, "country JP failed (%s), falling back to 01",
              esp_err_to_name(err));
-    memcpy(country.cc, "01", 2);
-    country.schan = 1;
-    country.nchan = 13;
-    return esp_wifi_set_country(&country);
+    return esp_wifi_set_country_code("01", false);
 }
 
 bool wifi::apply_sta_decode_protocol()
@@ -252,7 +245,9 @@ bool wifi::apply_modulation()
     // C6 (WiFi 6 driver): esp_wifi_config_80211_tx_rate returns ESP_OK while
     // running but leaves the rate unchanged; esp_wifi_config_80211_tx (phy
     // mode + rate) applies it while running, no restart needed (bench
-    // 2026-10-15: 54M -> 24M -> 1M -> 24M, checked on air).
+    // 2026-10-15: 54M -> 24M -> 1M -> 24M, checked on air). The IDF API note
+    // says to call it before esp_wifi_start, but on IDF 5.5.5 it returns
+    // ESP_FAIL there (checked 2026-11-04), so it stays after start.
     if (!apply_sta_decode_protocol())
     {
         return false;
@@ -523,6 +518,33 @@ bool wifi::set_tx_power(int8_t dbm)
         return false;
     }
     return tx_.set_tx_power(dbm);
+}
+
+bool wifi::set_tx_cal(const tx_power_map::cal& cal)
+{
+    bfc::semaphore::lock guard(lock, k_lock_wait);
+    if (!guard)
+    {
+        ESP_LOGE(TAG, "set_tx_cal: radio lock timeout");
+        return false;
+    }
+    return tx_.set_tx_cal(cal, ready());
+}
+
+bool wifi::tx_cal(tx_power_map::cal* out) const
+{
+    if (out == nullptr)
+    {
+        return false;
+    }
+    bfc::semaphore::lock guard(lock, k_lock_wait);
+    if (!guard)
+    {
+        ESP_LOGE(TAG, "tx_cal: radio lock timeout");
+        return false;
+    }
+    *out = tx_.tx_cal();
+    return true;
 }
 
 bool wifi::config(radio_config* out) const

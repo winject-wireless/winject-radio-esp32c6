@@ -30,9 +30,14 @@ public:
     radio_config radio() const override;
     radio_caps caps() const override;
     bool rx_rssi(int8_t* dbm) const override;
+    bool tx_power_applied_dbm(int8_t* dbm) const override;
     // Rejects unknown modulations and OFDM on channel 14 as invalid; applies
     // channel and modulation in the order that keeps each step legal.
     mplane_status set_radio(const radio_patch& patch) override;
+    size_t tx_cal_groups() const override;
+    mplane_status tx_cal(size_t index, radio_tx_cal_curve* out) const override;
+    // Unknown group / invalid curve -> invalid; stored in NVS ("txcal").
+    mplane_status set_tx_cal(const radio_tx_cal_patch& patch) override;
 
     mac_filter rx_filter_addr3() const override;
     mplane_status set_rx_filter_addr3(const mac_filter& filter) override;

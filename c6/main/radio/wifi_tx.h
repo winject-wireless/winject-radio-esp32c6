@@ -3,6 +3,7 @@
 
 #include "config.h"
 #include "packet.h"
+#include "tx_power_map.h"
 
 #include <atomic>
 #include <optional>
@@ -51,6 +52,12 @@ public:
     uint32_t nomem() const;
     uint32_t slot_waits() const;
     void note_invalid_frame();
+    // TX power in force after the last apply_power, dBm at the antenna
+    // connector (driver read-back through tx_power_map); false until one
+    // read back succeeded.
+    bool applied_dbm(int8_t* out) const;
+    // dBm <-> driver calibration in use (see tx_power_map.h).
+    tx_power_map::cal tx_cal() const;
 
 private:
     explicit wifi_tx(wifi& radio);
@@ -70,6 +77,8 @@ private:
     bool cca_enabled() const;
     bool set_cca_enabled(bool enabled);
     bool set_tx_power(int8_t dbm);
+    // Before the radio is up: stored only. After: re-applies the power.
+    bool set_tx_cal(const tx_power_map::cal& cal, bool apply);
 
     static void task(void* arg);
     static void on_tx_done(const esp_80211_tx_info_t* info);
@@ -78,7 +87,11 @@ private:
     bfc::wait_free_queue<std::optional<packet>, k_queue_max> q;
     bool cca_enabled_ = true;
     bool phy_cca_off = false;
+    // Requested, normalized dBm (see tx_power_map.h).
     int8_t tx_power_dbm = WIFI_DEFAULT_TX_POWER_DBM;
+    tx_power_map::cal cal_ = tx_power_map::default_cal();
+    // INT8_MIN until a read-back has succeeded.
+    std::atomic<int8_t> applied_dbm_{INT8_MIN};
     std::atomic<uint32_t> in_flight_{0};
     std::atomic<uint32_t> dropped_invalid_frame_{0};
     std::atomic<uint32_t> dropped_tx_queue_{0};

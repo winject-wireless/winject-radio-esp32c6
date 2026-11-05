@@ -135,3 +135,28 @@ TEST(MplaneParseTest, MacFormats)
     mplane_format_mac(want, text, sizeof(text));
     EXPECT_STREQ(text, "ca:fe:ba:be:00:1f");
 }
+
+TEST(MplaneArgsTest, ParsesFixedPoint)
+{
+    long v = 0;
+    EXPECT_TRUE(mplane_parse_fixed("1.978", 3, 0, 9999, &v));
+    EXPECT_EQ(v, 1978);
+    EXPECT_TRUE(mplane_parse_fixed("2", 3, 0, 9999, &v));
+    EXPECT_EQ(v, 2000);
+    EXPECT_TRUE(mplane_parse_fixed("-29.3", 2, -9999, 9999, &v));
+    EXPECT_EQ(v, -2930);
+    EXPECT_TRUE(mplane_parse_fixed("-0.05", 2, -9999, 9999, &v));
+    EXPECT_EQ(v, -5);
+    EXPECT_TRUE(mplane_parse_fixed("+1.7", 2, -9999, 9999, &v));
+    EXPECT_EQ(v, 170);
+    EXPECT_TRUE(mplane_parse_fixed(".5", 2, -9999, 9999, &v));
+    EXPECT_EQ(v, 50);
+    v = 7;
+    EXPECT_FALSE(mplane_parse_fixed("1.2345", 3, 0, 9999, &v));
+    EXPECT_FALSE(mplane_parse_fixed("", 2, -9999, 9999, &v));
+    EXPECT_FALSE(mplane_parse_fixed("-", 2, -9999, 9999, &v));
+    EXPECT_FALSE(mplane_parse_fixed(".", 2, -9999, 9999, &v));
+    EXPECT_FALSE(mplane_parse_fixed("1.2x", 2, -9999, 9999, &v));
+    EXPECT_FALSE(mplane_parse_fixed("100", 2, -9999, 9999, &v));  // 10000 > max
+    EXPECT_EQ(v, 7);
+}

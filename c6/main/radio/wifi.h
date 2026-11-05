@@ -38,6 +38,10 @@ public:
     bool set_modulation(const char* name);
     bool set_cca_enabled(bool enabled);
     bool set_tx_power(int8_t dbm);
+    // TX power calibration (dBm <-> driver); callable before initialize (the
+    // boot value from NVS) and at run time (re-applies the power).
+    bool set_tx_cal(const tx_power_map::cal& cal);
+    bool tx_cal(tx_power_map::cal* out) const;
     bool config(radio_config* out) const;
     // Known modulation name that is legal on channel (14 is DSSS/CCK only).
     static bool modulation_supported(const char* name, uint8_t channel);

@@ -9,6 +9,10 @@
 bool mplane_parse_uint(const char* text, unsigned long min, unsigned long max,
                        unsigned long* out);
 bool mplane_parse_int(const char* text, long min, long max, long* out);
+// Decimal with up to `decimals` fraction digits ("-29.3", "1.978", "12"),
+// returned scaled by 10^decimals; min/max are in the scaled unit.
+bool mplane_parse_fixed(const char* text, unsigned decimals, long min, long max,
+                        long* out);
 // true/false, 1/0, on/off, yes/no (case-insensitive).
 bool mplane_parse_bool(const char* text, bool* out);
 // Dotted quad only (no DNS: handlers run on the m-plane and console tasks).
@@ -60,6 +64,8 @@ public:
     status get_uint(const char* key, unsigned long min, unsigned long max,
                     unsigned long* out) const;
     status get_int(const char* key, long min, long max, long* out) const;
+    status get_fixed(const char* key, unsigned decimals, long min, long max,
+                     long* out) const;
     status get_bool(const char* key, bool* out) const;
 
 private:
