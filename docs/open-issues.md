@@ -55,12 +55,14 @@ never answers the P4 (the rollback path).
   END / ABORT, one request per reply, safe retries by offset.
 - C6: OTA task writing the inactive slot (sequential erase), app rollback
   enabled; a new image is confirmed by its first message from the P4.
-- P4 `winject_proxy`: HTTP server, `GET /` status and
-  `POST /update/c6` (raw image body), which streams the image, resets the C6
-  and checks the new image answers; if it does not, one more reset makes the
-  bootloader boot the previous image.
+- P4 `winject_proxy`: since 2026-11-06 udp_ota (UDP 3232, winject-radio-esp32-sdio-proxy
+  #6) instead of the HTTP server used for the tests above: `flash-c6` stages
+  the image in the P4's inactive slot, then streams it over this plane, resets
+  the C6 and checks the new image answers; if it does not, one more reset
+  makes the bootloader boot the previous image. `c6_reset` / `c6_download`
+  replace `POST /c6/reset` / `/c6/download`.
 
-P4 self-update, tested 2026-10-15: `POST /update/p4` (raw image body) writes
+P4 self-update, tested 2026-10-15 over the former HTTP path (now udp_ota `flash`): `POST /update/p4` (raw image body) writes
 the P4's inactive slot (two-slot partition table, rollback enabled) and
 restarts; the new image is confirmed on its first UDP datagram or HTTP request.
 A 560 KB image takes 2.4 s. Checked: update and confirm (survives a reset);
