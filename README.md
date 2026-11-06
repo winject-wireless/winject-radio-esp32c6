@@ -28,7 +28,7 @@ In the 10 + 15 Mbit/s run the C6 dropped 1 of 28,095 inject frames (`dropped_tx_
 Open issues are tracked in [docs/open-issues.md](docs/open-issues.md). Known limits (see [docs/sdio-link.md](docs/sdio-link.md#bus)):
 - Inject over SDIO reaches the channel limit at OFDM_54M: 3000 frames/s (33.6 Mbit/s) with 0.4% inject-queue drops and 0.7% air loss to the 8811AU.
 - The P4 re-establishes the link when the C6 reboots (m-plane `reset`, crash); a silent C6 is reset only after 30 s.
-- Firmware update over HTTP on the P4: `POST /update/p4` works; `POST /update/c6` (over SDIO) works too: a 957 KB image in 3–6 s.
+- Firmware update through the P4 over udp_ota (UDP 3232, the proxy's `tools/udp_ota.py`): the P4's own app, and the C6 (staged on the P4, then written over SDIO; a 957 KB image took 3–6 s over SDIO when measured through the former HTTP path). There is no HTTP server any more.
 
 ## Layout
 
@@ -43,7 +43,7 @@ test/winject_host/                Host unit tests carried over from winject-radi
 
 ## Build and flash
 
-Native ESP-IDF v5.5 (`. ~/esp/esp-idf-v5.5.5/export.sh`). Normal updates go over SDIO (`POST /update/c6`); a UART flash needs the C6's UART0 and boot strap, which each board wires differently:
+Native ESP-IDF v5.5 (`. ~/esp/esp-idf-v5.5.5/export.sh`). Normal updates go over SDIO (`udp_ota.py <P4 IP>:3232 flash-c6`); a UART flash needs the C6's UART0 and boot strap, which each board wires differently:
 
 | Board | C6 `U0RXD` / `U0TXD` | C6 `GPIO9` (boot) | UART flash |
 |---|---|---|---|
@@ -53,22 +53,25 @@ Native ESP-IDF v5.5 (`. ~/esp/esp-idf-v5.5.5/export.sh`). Normal updates go over
 With the bridge on the P4, the C6 is in its ROM downloader on `<C6 UART>` = the P4's USB-UART at 115200.
 
 ```bash
-# C6: enter the ROM downloader with `curl -X POST http://<P4 IP>/c6/download` (the P4
+# C6: enter the ROM downloader with `udp_ota.py <P4 IP>:3232 c6-download` (the P4
 # holds the C6's GPIO9 strap low; works with no bootable image) or by sending "dl" on
 # its UART (running firmware only), then
 cd c6 && idf.py build && cd build && \
   python -m esptool --chip esp32c6 -p <C6 UART> --before no_reset --after no_reset write_flash @flash_args
-# and boot it: curl -X POST http://<P4 IP>/c6/reset
+# and boot it: udp_ota.py <P4 IP>:3232 c6-reset
 ```
 
 The P4 side (proxy image, or an app that includes it such as rov-esp32p4) is built from [winject-radio-esp32-sdio-proxy](https://github.com/winject-wireless/winject-radio-esp32-sdio-proxy).
 
-After that, update both over HTTP through the P4 (raw image as the body); each keeps its previous image until the new one proves itself:
+After that, update both over udp_ota through the P4 (`tools/udp_ota.py` in winject-radio-esp32-sdio-proxy, Python stdlib only); each keeps its previous image until the new one proves itself:
 
 ```bash
-curl --data-binary @c6/build/winject-esp32c6.bin http://<P4 IP>/update/c6   # C6: kept once it answers the P4
-curl --data-binary @winject-p4-proxy.bin http://<P4 IP>/update/p4           # P4: kept once reached (e.g. curl http://<P4 IP>/)
+udp_ota.py <P4 IP>:3232 flash-c6 c6/build/winject-esp32c6.bin   # C6: staged on the P4, written over SDIO, kept once it answers the P4
+udp_ota.py <P4 IP>:3232 flash winject-p4-proxy.bin --reboot     # P4: kept once reached over the network
+udp_ota.py <P4 IP>:3232 status                                  # P4 image, c6=writing/ok/failed, link state
 ```
+
+The same works over the air on a rover (rov-esp32p4), through the ground's UDP 2430.
 
 Flash the C6 over its UART only while the P4 runs a firmware with the 30 s quiet window (any build from 71eb94a on): older ones reset a silent C6 mid-flash.
 
@@ -82,7 +85,7 @@ The P4 resets the C6 at boot, gets an address by DHCP (hostname `winject-esp32c6
 | Version | `v1.0.x`: same manager ↔ radio protocol (1.0) |
 | `network` | Set replies `NOK ENOTSUP`; the stored values are still carried in slots |
 | `test_ether_*` | `NOK ENOTSUP` |
-| Firmware update | HTTP on the P4 (`POST /update/c6`, `/update/p4`), two slots + rollback on both chips; `POST /c6/download` (P4 holds GPIO9 low) or UART `dl`, then esptool, for the first flash. `reset mode=OTA` boots with the radio off |
+| Firmware update | udp_ota on the P4 (UDP 3232: `flash-c6`, `flash`), two slots + rollback on both chips; `c6-download` (P4 holds GPIO9 low) or UART `dl`, then esptool, for the first flash. `reset mode=OTA` boots with the radio off |
 | Cores | One core: WiFi driver (23) > `wifi_tx` (20) > SDIO receive (19) > d-plane forward (17) > m-plane (5) |
 | CCA | On by default (`config_types.h`) and must stay on: listen-before-talk is a regulatory requirement. On this chip `cca=0` also stops reception (measured 2026-10-27: the rover received no frames with it off), so never set `radio.cca = 0` or `radio_tx cca=0` |
 | TX power | `tx_power` is dBm at the antenna connector (−30..30 accepted). The C6's driver value is not dBm (about 2 dB per 4 units, different per rate group), so each group has a calibration curve (`radio/tx_power_map.h`); the radio applies the nearest level it can and reports it as `tx_power_applied=` on the `radio_tx` line. Driver values above the API's 84 (up to 88) are set through libphy/libpp internals; 96 and above stop all TX |
