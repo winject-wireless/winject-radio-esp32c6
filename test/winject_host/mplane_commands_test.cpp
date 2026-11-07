@@ -189,6 +189,16 @@ public:
         return true;
     }
 
+    bool temperature_c_x10(int16_t* out) const override
+    {
+        if (!have_temp)
+        {
+            return false;
+        }
+        *out = temp_c_x10;
+        return true;
+    }
+
     bool tx_power_applied_dbm(int8_t* dbm) const override
     {
         if (!have_tx_power_readback)
@@ -285,6 +295,8 @@ public:
 
     bool have_rssi = false;
     bool have_tx_power_readback = false;
+    bool have_temp = false;
+    int16_t temp_c_x10 = 0;
     int set_radio_calls = 0;
     int set_tx_cal_calls = 0;
     radio_tx_cal_patch last_tx_cal;
@@ -562,6 +574,22 @@ TEST_F(MplaneCommandsTest, RadioTxInfoWithOptionalRssi)
               "radio_rx rssi=-42\n");
     EXPECT_EQ(run("radio_tx tx_power=20"),
               "OK radio_tx channel=1 tx_power=20 modulation=DSS_1M_L cca=true tx_power_applied=15\n");
+}
+
+TEST_F(MplaneCommandsTest, RadioTxInfoWithTemperature)
+{
+    EXPECT_EQ(run("rti"),
+              "radio_tx channel=1 tx_power=20 modulation=DSS_1M_L cca=true\n");
+    // Chip temperature in 0.1 degC, printed only when the radio has a sensor.
+    radio.have_temp = true;
+    radio.temp_c_x10 = 423;
+    EXPECT_EQ(run("rti"),
+              "radio_tx channel=1 tx_power=20 modulation=DSS_1M_L cca=true\n"
+              "radio_temp c=42.3\n");
+    radio.temp_c_x10 = -35;
+    EXPECT_EQ(run("rti"),
+              "radio_tx channel=1 tx_power=20 modulation=DSS_1M_L cca=true\n"
+              "radio_temp c=-3.5\n");
 }
 
 TEST_F(MplaneCommandsTest, RadioCapsInfo)

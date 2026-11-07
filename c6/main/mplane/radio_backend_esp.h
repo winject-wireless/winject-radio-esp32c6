@@ -34,6 +34,7 @@ public:
     // Rejects unknown modulations and OFDM on channel 14 as invalid; applies
     // channel and modulation in the order that keeps each step legal.
     mplane_status set_radio(const radio_patch& patch) override;
+    bool temperature_c_x10(int16_t* out) const override;
     size_t tx_cal_groups() const override;
     mplane_status tx_cal(size_t index, radio_tx_cal_curve* out) const override;
     // Unknown group / invalid curve -> invalid; stored in NVS ("txcal").

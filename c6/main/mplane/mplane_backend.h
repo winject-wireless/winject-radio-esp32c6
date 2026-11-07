@@ -181,6 +181,13 @@ public:
         return false;
     }
     virtual mplane_status set_radio(const radio_patch& patch) = 0;
+    // Chip temperature in 0.1 degC (diagnostics; radio_tx_info prints it as
+    // `radio_temp c=<degC>`). false when the radio has no sensor.
+    virtual bool temperature_c_x10(int16_t* out) const
+    {
+        (void)out;
+        return false;
+    }
     // TX power calibration groups (0 = not calibratable); set applies it at
     // once and stores it on the board.
     virtual size_t tx_cal_groups() const
