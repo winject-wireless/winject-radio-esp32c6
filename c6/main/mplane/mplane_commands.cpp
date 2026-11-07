@@ -735,6 +735,13 @@ void mplane_commands::cmd_radio_tx_info(char* args, mplane_reply& reply)
     {
         reply.print("radio_rx rssi=%d\n", static_cast<int>(rssi));
     }
+    int16_t temp = 0;
+    if (radio_->temperature_c_x10(&temp))
+    {
+        char t[16];
+        format_fixed(temp, 1, t, sizeof(t));
+        reply.print("radio_temp c=%s\n", t);
+    }
 }
 
 namespace

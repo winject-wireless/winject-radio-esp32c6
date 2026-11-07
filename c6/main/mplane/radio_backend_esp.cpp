@@ -4,6 +4,7 @@
 #include "settings.h"
 #include "wifi.h"
 
+#include "driver/temperature_sensor.h"
 #include "esp_log.h"
 
 #include <string.h>
@@ -288,4 +289,34 @@ mplane_status radio_backend_esp::set_tx_cal(const radio_tx_cal_patch& patch)
     ESP_LOGI(TAG, "tx_cal %s %s", patch.group != nullptr ? patch.group : "all",
              patch.reset ? "reset" : "set");
     return mplane_status::ok;
+}
+
+// On-chip sensor (shared with the PHY's own temperature tracking); installed
+// on first use, range -10..80 degC.
+bool radio_backend_esp::temperature_c_x10(int16_t* out) const
+{
+    static temperature_sensor_handle_t handle = nullptr;
+    static bool failed = false;
+    if (out == nullptr || failed)
+    {
+        return false;
+    }
+    if (handle == nullptr)
+    {
+        const temperature_sensor_config_t cfg = TEMPERATURE_SENSOR_CONFIG_DEFAULT(-10, 80);
+        if (temperature_sensor_install(&cfg, &handle) != ESP_OK ||
+            temperature_sensor_enable(handle) != ESP_OK)
+        {
+            ESP_LOGW(TAG, "temperature sensor unavailable");
+            failed = true;
+            return false;
+        }
+    }
+    float c = 0.0f;
+    if (temperature_sensor_get_celsius(handle, &c) != ESP_OK)
+    {
+        return false;
+    }
+    *out = static_cast<int16_t>(c * 10.0f + (c >= 0.0f ? 0.5f : -0.5f));
+    return true;
 }

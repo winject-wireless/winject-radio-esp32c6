@@ -34,6 +34,7 @@ idf_component_register(
         sdio_link_slave
         app_update
         esp_driver_gpio
+        esp_driver_tsens
         esp_driver_uart
         vfs
         esp_event
