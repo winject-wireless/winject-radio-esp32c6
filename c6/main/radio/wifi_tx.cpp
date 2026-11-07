@@ -24,20 +24,32 @@ static constexpr int64_t k_fail_log_interval_us = 1000000;
 // the public API's 84 (0.25 dBm) cap; recheck them on any IDF upgrade.
 //  - phy_set_most_tpw: libphy's maximum TX power (phy_param[6]); rebuilds
 //    the TX gain table from it. esp_wifi_set_max_tx_power ends here, capped 84.
-//  - hal_get/set_tx_pwr: libpp's per-rate power table (43 entries) that the
-//    MAC uses per frame; hal_init_tx_pwr fills it via get_target_pwr, which
-//    clamps every rate to 84. hal_get_tx_pwr maps rate codes > 25 to index
-//    code - 10; hal_set_tx_pwr takes the raw index.
+//  - hal_set_tx_pwr: libpp's per-rate power table (one entry per rate code;
+//    the MAC uses it per frame). hal_init_tx_pwr fills it via get_target_pwr,
+//    which clamps every rate to 84. Rate codes 0..25 are the raw index.
 extern "C" void phy_set_most_tpw(int8_t qdbm);
 extern "C" int8_t hal_get_tx_pwr(uint32_t rate);
 extern "C" void hal_set_tx_pwr(uint32_t index, int8_t qdbm);
 extern "C" uint8_t phy_param[];
 
-static constexpr uint32_t k_hal_tx_pwr_entries = 43;
-
-static int8_t hal_tx_pwr_at(uint32_t index)
+// Per-rate boost: DSSS, CCK and legacy OFDM up to 36 Mbps (16-QAM). 48M (0x08)
+// and 54M (0x0C) are 64-QAM and keep their PHY table value. Codes are the
+// wifi_phy_rate_t values (components/esp_wifi/include/esp_wifi_types_generic.h).
+static bool boost_rate(uint32_t code)
 {
-    return hal_get_tx_pwr(index < 26 ? index : index + 10);
+    return code <= 0x03 || (code >= 0x05 && code <= 0x07) ||
+           (code >= 0x09 && code <= 0x0B) || (code >= 0x0D && code <= 0x0F);
+}
+
+// 36 Mbps is kept identical to 24 Mbps for now (both are 16-QAM, one EVM
+// group). The two rates use different PHY table slots (24M slot 6, 36M slot 8,
+// which 54M shares), so copy the 24M entry to 36M after each table rebuild.
+static constexpr uint32_t k_rate_24m = 0x09;
+static constexpr uint32_t k_rate_36m = 0x0D;
+
+static void match_36m_to_24m()
+{
+    hal_set_tx_pwr(k_rate_36m, hal_get_tx_pwr(k_rate_24m));
 }
 
 extern "C" int ieee80211_raw_frame_sanity_check(int32_t, int32_t, uint32_t,
@@ -111,9 +123,10 @@ static tx_power_map::rate_class rate_class_for(wifi_phy_rate_t rate)
 //
 // Up to 84 the public API sets it (esp_wifi_set_max_tx_power, which also
 // rebuilds libpp's per-rate table). Above (the boost, up to 88) libphy's
-// maximum and every per-rate entry sitting at the 84 cap are raised directly;
-// rates the PHY init data keeps lower (64-QAM) stay where they are. Channel
-// and protocol changes rebuild the table, so they call apply_power again.
+// maximum is raised, and the per-rate entries for DSSS, CCK and OFDM up to
+// 36 Mbps are set to the same level (boost_rate); 48M and 54M keep their
+// table value. Channel and protocol changes rebuild the table, so they call
+// apply_power again.
 // The country is set once before esp_wifi_start (wifi::initialize).
 bool wifi_tx::apply_power()
 {
@@ -138,11 +151,11 @@ bool wifi_tx::apply_power()
     {
         phy_set_most_tpw(static_cast<int8_t>(q));
         unsigned raised = 0;
-        for (uint32_t i = 0; i < k_hal_tx_pwr_entries; i++)
+        for (uint32_t code = 0; code < 26; code++)
         {
-            if (hal_tx_pwr_at(i) >= tx_power_map::k_qdbm_api_max)
+            if (boost_rate(code))
             {
-                hal_set_tx_pwr(i, static_cast<int8_t>(q));
+                hal_set_tx_pwr(code, static_cast<int8_t>(q));
                 raised++;
             }
         }
@@ -160,6 +173,7 @@ bool wifi_tx::apply_power()
             return true;
         }
     }
+    match_36m_to_24m();
     const int dbm = tx_power_map::dbm_for_qdbm(applied, curve);
     applied_dbm_.store(static_cast<int8_t>(dbm), std::memory_order_relaxed);
     ESP_LOGI(TAG, "tx_power %d dBm requested: driver %d (set %d) -> %d dBm", tx_power_dbm,
