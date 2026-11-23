@@ -8,6 +8,7 @@ endif()
 add_compile_definitions(WINJECT_VERSION_STRING="v${PROJECT_VER}")
 set(EXTRA_COMPONENT_DIRS
     ${CMAKE_CURRENT_LIST_DIR}/../components/sdio_msg
-    ${CMAKE_CURRENT_LIST_DIR}/../components/sdio_link_slave)
+    ${CMAKE_CURRENT_LIST_DIR}/../components/sdio_link_slave
+    ${CMAKE_CURRENT_LIST_DIR}/../components/sdio_test_meter)
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(winject-esp32c6)

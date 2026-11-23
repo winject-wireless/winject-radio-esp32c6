@@ -1,5 +1,6 @@
 #include "test_backend_esp.h"
 
+#include "sdio_bwtest.h"
 #include "wifi.h"
 
 test_backend_esp::test_backend_esp(wifi& radio) : radio_(radio), wifi_tx_(radio)
@@ -47,4 +48,15 @@ rx_test_stats test_backend_esp::wifi_rx_stats(bool clear)
 mplane_status test_backend_esp::wifi_tx(const wifi_tx_request& req)
 {
     return wifi_tx_.run(req);
+}
+
+mplane_status test_backend_esp::sdio_test(const sdio_test_request& req)
+{
+    return sdio_bwtest::instance().start(req);
+}
+
+mplane_status test_backend_esp::sdio_test_stat(sdio_test_result* out) const
+{
+    *out = sdio_bwtest::instance().result();
+    return mplane_status::ok;
 }

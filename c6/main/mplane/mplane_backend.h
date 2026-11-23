@@ -213,10 +213,116 @@ public:
     virtual const char* modulation_list() const = 0;
 };
 
+// test_sdio: SDIO link bandwidth test against the P4 proxy (docs/sdio-link.md,
+// "Test plane").
+enum class sdio_test_dir : uint8_t
+{
+    p4c6,  // the P4 sends, the C6 counts
+    c6p4,  // the C6 sends, the P4 counts
+    both,
+};
+
+enum class sdio_test_probe : uint8_t
+{
+    off,
+    internal,  // internal SRAM on both chips
+    psram,     // P4 PSRAM (the C6 has none; its probe stays off)
+};
+
+struct sdio_test_request
+{
+    uint32_t count = 0;  // packets per direction; 0 = stop a running test
+    uint16_t mtu = 0;
+    uint32_t pacing_us = 0;  // 0 = as fast as the link takes them
+    sdio_test_dir dir = sdio_test_dir::both;
+    sdio_test_probe probe = sdio_test_probe::off;
+    uint32_t base_ms = 500;  // idle baseline window before the traffic; 0 = none
+    // P4 AXI performance monitor ports for its two units (sdio_test.h
+    // SDIO_TEST_AXI_*: 1 cache ... 7 psram ... 9 lcd; 0 = unit off). Measured
+    // only on a P4 that has the monitor (rev 3.0+); elsewhere reported as
+    // unavailable.
+    uint8_t axi_agent[2] = {1, 7};
+};
+
+// One direction: sender and receiver counts.
+struct sdio_test_flow
+{
+    bool ran = false;
+    uint32_t sent = 0;
+    uint32_t send_fail = 0;
+    uint32_t sender_us = 0;
+    uint32_t rx = 0;
+    uint32_t lost = 0;
+    uint32_t reorder = 0;
+    uint32_t bad = 0;
+    uint32_t rx_us = 0;  // first packet received to last
+    uint64_t rx_bytes = 0;
+};
+
+// CPU and memory probe on one chip over one window.
+struct sdio_test_window_stats
+{
+    bool valid = false;
+    uint32_t window_us = 0;
+    uint8_t cores = 0;
+    uint16_t busy_permille[2] = {0, 0};  // 0xffff = unknown
+    bool probe_ok = false;
+    uint64_t probe_bytes = 0;
+    uint32_t probe_us = 0;
+    // AXI monitor (P4 rev 3.0+): port per unit (0 = not measured) and its
+    // data-channel use in 1/1000 of the bus cycles, mean and busiest window.
+    uint8_t axi_agent[2] = {0, 0};
+    uint16_t axi_rd_mean_permille[2] = {0, 0};
+    uint16_t axi_wr_mean_permille[2] = {0, 0};
+    uint16_t axi_rd_max_permille[2] = {0, 0};
+    uint16_t axi_wr_max_permille[2] = {0, 0};
+    uint32_t axi_samples = 0;
+};
+
+enum class sdio_test_state : uint8_t
+{
+    idle,
+    running,
+    done,
+    stopped,
+    failed,
+};
+
+struct sdio_test_result
+{
+    sdio_test_state state = sdio_test_state::idle;
+    const char* error = nullptr;  // with failed: short token
+    uint16_t run = 0;
+    sdio_test_request req;
+    sdio_test_flow p4c6;
+    sdio_test_flow c6p4;
+    sdio_test_window_stats c6_base, c6_load, p4_base, p4_load;
+    uint32_t p4_credit_waits = 0;  // P4 sends that found no free C6 buffer (load window)
+    uint32_t p4_rx_reads = 0;      // P4 host reads (load window)
+    uint32_t p4_tx_writes = 0;     // P4 host writes to the C6 (load window)
+    uint32_t p4_tx_slots = 0;      // C6 receive buffers they filled
+    uint32_t p4_tx_msgs = 0;       // messages they carried
+    uint32_t p4_link_freq_khz = 0; // SDIO clock (0 = P4 too old to say)
+    uint32_t p4_link_downs = 0;    // link losses in the load window
+};
+
 class mplane_test_backend
 {
 public:
     virtual ~mplane_test_backend() = default;
+
+    // Starts the test in the background (already: one is running), or stops
+    // it with count 0.
+    virtual mplane_status sdio_test(const sdio_test_request& req)
+    {
+        (void)req;
+        return mplane_status::unsupported;
+    }
+    virtual mplane_status sdio_test_stat(sdio_test_result* out) const
+    {
+        (void)out;
+        return mplane_status::unsupported;
+    }
 
     // port == 0 closes the test socket.
     virtual mplane_status set_ether_rx_port(uint16_t port) = 0;

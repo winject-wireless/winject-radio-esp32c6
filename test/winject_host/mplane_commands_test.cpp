@@ -367,6 +367,22 @@ public:
         return next_status;
     }
 
+    mplane_status sdio_test(const sdio_test_request& req) override
+    {
+        sdio_req = req;
+        ++sdio_calls;
+        return next_status;
+    }
+
+    mplane_status sdio_test_stat(sdio_test_result* out) const override
+    {
+        *out = sdio_result;
+        return mplane_status::ok;
+    }
+
+    sdio_test_request sdio_req;
+    int sdio_calls = 0;
+    sdio_test_result sdio_result;
     uint16_t ether_rx_port = 1;
     bool last_clear = false;
     ether_tx_request ether_req;
@@ -789,4 +805,137 @@ TEST_F(MplaneCommandsTest, RadioTxCalRejectsBadRequests)
     // The backend owns group names and curve rules.
     EXPECT_EQ(run("rtc group=bogus points=8:-28,84:15"), "NOK EINVAL\n");
     EXPECT_EQ(radio.set_tx_cal_calls, 1);
+}
+
+TEST_F(MplaneCommandsTest, TestSdioParses)
+{
+    EXPECT_EQ(run("test_sdio dir=both mtu=1400 count=1000 pacing_us=250 probe=int base_ms=0"),
+              "OK\n");
+    EXPECT_EQ(test.sdio_req.dir, sdio_test_dir::both);
+    EXPECT_EQ(test.sdio_req.mtu, 1400u);
+    EXPECT_EQ(test.sdio_req.count, 1000u);
+    EXPECT_EQ(test.sdio_req.pacing_us, 250u);
+    EXPECT_EQ(test.sdio_req.probe, sdio_test_probe::internal);
+    EXPECT_EQ(test.sdio_req.base_ms, 0u);
+    EXPECT_EQ(run("tsd dir=c6p4 mtu=8 count=1"), "OK\n");
+    EXPECT_EQ(test.sdio_req.dir, sdio_test_dir::c6p4);
+    EXPECT_EQ(test.sdio_req.probe, sdio_test_probe::off);
+    EXPECT_EQ(test.sdio_req.base_ms, 500u);
+    EXPECT_EQ(run("test_sdio count=0"), "OK\n");
+    EXPECT_EQ(test.sdio_req.count, 0u);
+}
+
+TEST_F(MplaneCommandsTest, TestSdioAxiPorts)
+{
+    EXPECT_EQ(run("test_sdio dir=both mtu=100 count=1"), "OK\n");
+    EXPECT_EQ(test.sdio_req.axi_agent[0], 1u);  // default cache,psram
+    EXPECT_EQ(test.sdio_req.axi_agent[1], 7u);
+    EXPECT_EQ(run("test_sdio dir=both mtu=100 count=1 axi=off"), "OK\n");
+    EXPECT_EQ(test.sdio_req.axi_agent[0], 0u);
+    EXPECT_EQ(test.sdio_req.axi_agent[1], 0u);
+    EXPECT_EQ(run("test_sdio dir=both mtu=100 count=1 axi=PSRAM"), "OK\n");
+    EXPECT_EQ(test.sdio_req.axi_agent[0], 7u);
+    EXPECT_EQ(test.sdio_req.axi_agent[1], 0u);
+    EXPECT_EQ(run("test_sdio dir=both mtu=100 count=1 axi=h264a,lcd"), "OK\n");
+    EXPECT_EQ(test.sdio_req.axi_agent[0], 5u);
+    EXPECT_EQ(test.sdio_req.axi_agent[1], 9u);
+    const int calls = test.sdio_calls;
+    EXPECT_EQ(run("test_sdio dir=both mtu=100 count=1 axi=sdmmc"), "NOK EINVAL\n");
+    EXPECT_EQ(run("test_sdio dir=both mtu=100 count=1 axi=cache,psram,lcd"), "NOK EINVAL\n");
+    EXPECT_EQ(run("test_sdio dir=both mtu=100 count=1 axi=cache,"), "NOK EINVAL\n");
+    EXPECT_EQ(run("test_sdio dir=both mtu=100 count=1 axi="), "NOK EINVAL\n");
+    EXPECT_EQ(test.sdio_calls, calls);
+}
+
+TEST_F(MplaneCommandsTest, TestSdioRejectsBadRequests)
+{
+    const int calls = test.sdio_calls;
+    EXPECT_EQ(run("test_sdio dir=both mtu=7 count=1"), "NOK EINVAL\n");
+    EXPECT_EQ(run("test_sdio dir=both mtu=1505 count=1"), "NOK EINVAL\n");
+    EXPECT_EQ(run("test_sdio dir=up mtu=100 count=1"), "NOK EINVAL\n");
+    EXPECT_EQ(run("test_sdio mtu=100 count=1"), "NOK EINVAL\n");
+    EXPECT_EQ(run("test_sdio dir=both mtu=100 count=1 probe=l2"), "NOK EINVAL\n");
+    EXPECT_EQ(run("test_sdio dir=both mtu=100"), "NOK EINVAL\n");
+    EXPECT_EQ(run("test_sdio dir=both mtu=100 count=1 rate=5"), "NOK EINVAL\n");
+    EXPECT_EQ(test.sdio_calls, calls);
+    test.next_status = mplane_status::already;
+    EXPECT_EQ(run("test_sdio dir=both mtu=100 count=1"), "NOK EALREADY\n");
+}
+
+TEST_F(MplaneCommandsTest, TestSdioStatIdle)
+{
+    EXPECT_EQ(run("test_sdio_stat"), "test_sdio_stat state=idle\n");
+    EXPECT_EQ(run("tsds x=1"), "NOK EINVAL\n");
+}
+
+TEST_F(MplaneCommandsTest, TestSdioStatReport)
+{
+    sdio_test_result& r = test.sdio_result;
+    r.state = sdio_test_state::done;
+    r.run = 3;
+    r.req.dir = sdio_test_dir::p4c6;
+    r.req.mtu = 1400;
+    r.req.count = 1000;
+    r.req.probe = sdio_test_probe::internal;
+    r.p4c6.ran = true;
+    r.p4c6.sent = 1000;
+    r.p4c6.sender_us = 230000;
+    r.p4c6.rx = 999;
+    r.p4c6.lost = 1;
+    r.p4c6.rx_us = 224000;
+    r.p4c6.rx_bytes = 1398600;
+    r.c6_base.valid = true;
+    r.c6_base.window_us = 500000;
+    r.c6_base.cores = 1;
+    r.c6_base.busy_permille[0] = 21;
+    r.c6_base.probe_ok = true;
+    r.c6_base.probe_bytes = 50000000;
+    r.c6_base.probe_us = 400000;
+    r.p4_base.valid = true;
+    r.p4_base.window_us = 500100;
+    r.p4_base.cores = 2;
+    r.p4_base.busy_permille[0] = 30;
+    r.p4_base.busy_permille[1] = 0xffff;
+    r.p4_base.probe_ok = false;
+    r.c6_load = r.c6_base;
+    r.c6_load.busy_permille[0] = 873;
+    r.c6_load.probe_bytes = 10000000;
+    r.p4_load = r.p4_base;
+    r.p4_load.axi_agent[0] = 1;
+    r.p4_load.axi_agent[1] = 7;
+    r.p4_load.axi_rd_mean_permille[0] = 123;
+    r.p4_load.axi_wr_mean_permille[0] = 40;
+    r.p4_load.axi_rd_max_permille[0] = 551;
+    r.p4_load.axi_wr_max_permille[0] = 200;
+    r.p4_load.axi_rd_mean_permille[1] = 310;
+    r.p4_load.axi_wr_mean_permille[1] = 95;
+    r.p4_load.axi_rd_max_permille[1] = 999;
+    r.p4_load.axi_wr_max_permille[1] = 402;
+    r.p4_load.axi_samples = 2200;
+    r.p4_credit_waits = 12;
+    r.p4_rx_reads = 40;
+    EXPECT_EQ(run("test_sdio_stat"),
+              "test_sdio_stat state=done run=3 dir=p4c6 mtu=1400 count=1000 pacing_us=0 probe=int "
+              "base_ms=500 axi=cache,psram\n"
+              "test_sdio_stat flow=p4c6 sent=1000 send_fail=0 tx_us=230000 rx=999 lost=1 reorder=0 "
+              "bad=0 rx_us=224000 rx_bytes=1398600 kbps=49950\n"
+              "test_sdio_stat cpu=base c6_us=500000 p4_us=500100 c6=2.1 p4c0=3.0 p4c1=-\n"
+              "test_sdio_stat cpu=load c6_us=500000 p4_us=500100 c6=87.3 p4c0=3.0 p4c1=-\n"
+              "test_sdio_stat membus=base mem=int c6=125.0 p4=-\n"
+              "test_sdio_stat membus=load mem=int c6=25.0 p4=-\n"
+              "test_sdio_stat axi=base unavailable\n"
+              "test_sdio_stat axi=load cache_rd=12.3 cache_wr=4.0 cache_rd_max=55.1 "
+              "cache_wr_max=20.0 psram_rd=31.0 psram_wr=9.5 psram_rd_max=99.9 psram_wr_max=40.2 "
+              "samples=2200\n"
+              "test_sdio_stat link p4_credit_waits=12 p4_rx_reads=40 p4_tx_writes=0 p4_tx_slots=0 "
+              "p4_tx_msgs=0 freq_khz=0 link_downs=0\n");
+    r.state = sdio_test_state::failed;
+    r.error = "p4_no_reply";
+    r.p4c6 = sdio_test_flow{};
+    r.req.probe = sdio_test_probe::off;
+    r.req.axi_agent[0] = r.req.axi_agent[1] = 0;
+    r.c6_base = r.c6_load = r.p4_base = r.p4_load = sdio_test_window_stats{};
+    EXPECT_EQ(run("test_sdio_stat"),
+              "test_sdio_stat state=failed error=p4_no_reply run=3 dir=p4c6 mtu=1400 count=1000 "
+              "pacing_us=0 probe=off base_ms=500 axi=off\n");
 }

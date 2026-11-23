@@ -96,6 +96,7 @@ The P4 resets the C6 at boot, gets an address by DHCP (hostname `winject-esp32c6
 | LEDs | None (the WT32 LED pins are the C6's UART) |
 | TX pacing | The Ethernet radio's constants (in-flight cap 4, bursts of 8): they do not limit rate here (3000+ frames/s at OFDM_54M) |
 | Diagnostics | UART `mon 1`: inject-path rates (`in`, `air`, `submit`, `nomem`, `slotwait`, `dropq`), queue, in-flight, heap, per-task CPU once a second |
+| `test_sdio\|tsd`, `test_sdio_stat\|tsds` | SDIO link test against the P4 proxy: capacity per direction, CPU on both chips, memory-bus contention, P4 AXI port load where the P4 has the monitor ([docs/sdio-link.md](docs/sdio-link.md#test-plane)) |
 
 ## Host unit tests
 
