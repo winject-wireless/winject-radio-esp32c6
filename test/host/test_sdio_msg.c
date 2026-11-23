@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "sdio_msg.h"
+#include "sdio_test.h"
 
 #define CHECK(c)                                                         \
     do {                                                                 \
@@ -40,7 +41,8 @@ static void test_encode(void)
     CHECK(out[12] == 0xee);
     CHECK(sdio_msg_encode(out, SDIO_MSG_PLANE_MPLANE, NULL, 0) == 4);
     CHECK(sdio_msg_encode(out, SDIO_MSG_PLANE_OTA, p, 5) == 12);
-    CHECK(sdio_msg_encode(out, 4, p, 5) == 0);
+    CHECK(sdio_msg_encode(out, SDIO_MSG_PLANE_TEST, p, 5) == 12);
+    CHECK(sdio_msg_encode(out, 5, p, 5) == 0);
     CHECK(sdio_msg_encode(out, 0, p, 5) == 0);
     static uint8_t big[SDIO_MSG_MAX_PAYLOAD + 1];
     CHECK(sdio_msg_encode(out, SDIO_MSG_PLANE_DPLANE, big, SDIO_MSG_MAX_PAYLOAD) == SDIO_MSG_MAX_SIZE);
@@ -104,8 +106,54 @@ static void test_parse_terminator_and_bad(void)
     CHECK(r == SDIO_MSG_PARSE_BAD && g.n == 1);
 }
 
+static void rx(sdio_test_rx_t *r, uint16_t run, uint32_t seq, uint16_t len, int64_t us)
+{
+    uint8_t buf[64] = {0};
+    sdio_test_packet_set(buf, run, seq);
+    sdio_test_rx_packet(r, buf, len, us);
+}
+
+static void test_rx_counter(void)
+{
+    CHECK(sizeof(sdio_test_packet_t) == 8);
+    CHECK(sizeof(sdio_test_bw_tx_t) == 16);
+    CHECK(sizeof(sdio_test_get_rx_stats_t) == 8);
+    sdio_test_rx_t r;
+    sdio_test_rx_reset(&r, 7);
+    rx(&r, 7, 0, 64, 1000);
+    rx(&r, 7, 1, 64, 1100);
+    rx(&r, 6, 2, 64, 1150);  // other run: ignored
+    rx(&r, 7, 4, 64, 1200);  // 2 and 3 missing
+    CHECK(r.c.pkts == 3 && r.c.lost == 2 && r.c.reorder == 0 && r.c.bytes == 192);
+    rx(&r, 7, 2, 64, 1300);  // late
+    CHECK(r.c.pkts == 4 && r.c.lost == 1 && r.c.reorder == 1);
+    rx(&r, 7, 4, 64, 1400);  // repeat: 3 is still missing
+    CHECK(r.c.reorder == 2 && r.c.lost == 1 && r.c.span_us == 400);
+    rx(&r, 7, 2, 64, 1410);  // repeat of a late one
+    CHECK(r.c.reorder == 3 && r.c.lost == 1);
+    rx(&r, 7, 3, 64, 1420);  // late
+    CHECK(r.c.reorder == 4 && r.c.lost == 0);
+    rx(&r, 7, 5, 4, 1500);   // too short
+    CHECK(r.c.bad == 1 && r.c.pkts == 7);
+    // A gap wider than the window, then a late packet from far behind: too
+    // old to tell, so it does not lower lost; one inside the window does.
+    rx(&r, 7, 5 + SDIO_TEST_RX_WINDOW + 10, 64, 1600);
+    CHECK(r.c.lost == SDIO_TEST_RX_WINDOW + 10);
+    rx(&r, 7, 6, 64, 1700);
+    CHECK(r.c.lost == SDIO_TEST_RX_WINDOW + 10);
+    rx(&r, 7, 5 + SDIO_TEST_RX_WINDOW + 5, 64, 1800);
+    CHECK(r.c.lost == SDIO_TEST_RX_WINDOW + 9);
+    rx(&r, 7, 5 + SDIO_TEST_RX_WINDOW + 5, 64, 1900);
+    CHECK(r.c.lost == SDIO_TEST_RX_WINDOW + 9);
+    // First packet not seq 0: the ones before it count as lost.
+    sdio_test_rx_reset(&r, 8);
+    rx(&r, 8, 3, 64, 0);
+    CHECK(r.c.pkts == 1 && r.c.lost == 3 && r.c.span_us == 0);
+}
+
 int main(void)
 {
+    test_rx_counter();
     test_encode();
     test_parse_batch_and_tail();
     test_parse_terminator_and_bad();

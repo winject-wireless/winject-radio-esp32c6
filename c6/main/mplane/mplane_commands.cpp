@@ -48,6 +48,187 @@ bool args_empty(const char* text)
     return true;
 }
 
+const char* sdio_dir_name(sdio_test_dir d)
+{
+    switch (d)
+    {
+    case sdio_test_dir::p4c6:
+        return "p4c6";
+    case sdio_test_dir::c6p4:
+        return "c6p4";
+    default:
+        return "both";
+    }
+}
+
+const char* sdio_probe_name(sdio_test_probe p)
+{
+    switch (p)
+    {
+    case sdio_test_probe::internal:
+        return "int";
+    case sdio_test_probe::psram:
+        return "psram";
+    default:
+        return "off";
+    }
+}
+
+// P4 AXI monitor ports, by SDIO_TEST_AXI_* value (sdio_test.h).
+const char* const k_axi_names[] = {nullptr, "cache", "vdma1", "vdma2", "dma2d",
+                                   "h264a", "h264b", "psram", "cam",   "lcd"};
+constexpr uint8_t k_axi_count = sizeof(k_axi_names) / sizeof(k_axi_names[0]);
+
+const char* axi_name(uint8_t a)
+{
+    return a > 0 && a < k_axi_count ? k_axi_names[a] : "-";
+}
+
+// "off", or one or two comma-separated port names.
+bool parse_axi(const char* value, uint8_t out[2])
+{
+    out[0] = out[1] = 0;
+    if (strcasecmp(value, "off") == 0)
+    {
+        return true;
+    }
+    size_t n = 0;
+    const char* p = value;
+    while (*p != '\0')
+    {
+        const char* end = strchr(p, ',');
+        const size_t len = end != nullptr ? static_cast<size_t>(end - p) : strlen(p);
+        uint8_t found = 0;
+        for (uint8_t a = 1; a < k_axi_count; ++a)
+        {
+            if (strlen(k_axi_names[a]) == len && strncasecmp(p, k_axi_names[a], len) == 0)
+            {
+                found = a;
+            }
+        }
+        if (found == 0 || n == 2)
+        {
+            return false;
+        }
+        out[n++] = found;
+        if (end == nullptr)
+        {
+            break;
+        }
+        p = end + 1;
+        if (*p == '\0')
+        {
+            return false;  // trailing comma
+        }
+    }
+    return n > 0;
+}
+
+const char* sdio_state_name(sdio_test_state s)
+{
+    switch (s)
+    {
+    case sdio_test_state::running:
+        return "running";
+    case sdio_test_state::done:
+        return "done";
+    case sdio_test_state::stopped:
+        return "stopped";
+    case sdio_test_state::failed:
+        return "failed";
+    default:
+        return "idle";
+    }
+}
+
+// " key=12.3" from permille, or " key=-" when unknown.
+void print_permille(mplane_reply& reply, const char* key, uint16_t v)
+{
+    if (v == 0xffff)
+    {
+        reply.print(" %s=-", key);
+        return;
+    }
+    reply.print(" %s=%u.%u", key, static_cast<unsigned>(v / 10),
+                static_cast<unsigned>(v % 10));
+}
+
+void print_axi(mplane_reply& reply, const char* which, const sdio_test_window_stats& p4)
+{
+    reply.print("test_sdio_stat axi=%s", which);
+    if (!p4.valid || (p4.axi_agent[0] == 0 && p4.axi_agent[1] == 0))
+    {
+        reply.write(" unavailable\n");
+        return;
+    }
+    for (int u = 0; u < 2; ++u)
+    {
+        if (p4.axi_agent[u] == 0)
+        {
+            continue;
+        }
+        char key[24];
+        const char* name = axi_name(p4.axi_agent[u]);
+        snprintf(key, sizeof(key), "%s_rd", name);
+        print_permille(reply, key, p4.axi_rd_mean_permille[u]);
+        snprintf(key, sizeof(key), "%s_wr", name);
+        print_permille(reply, key, p4.axi_wr_mean_permille[u]);
+        snprintf(key, sizeof(key), "%s_rd_max", name);
+        print_permille(reply, key, p4.axi_rd_max_permille[u]);
+        snprintf(key, sizeof(key), "%s_wr_max", name);
+        print_permille(reply, key, p4.axi_wr_max_permille[u]);
+    }
+    reply.print(" samples=%lu\n", static_cast<unsigned long>(p4.axi_samples));
+}
+
+// Memory probe in MB/s of probe CPU time (bytes per microsecond), one decimal.
+void print_probe(mplane_reply& reply, const char* key, const sdio_test_window_stats& w)
+{
+    if (!w.valid || !w.probe_ok || w.probe_us == 0)
+    {
+        reply.print(" %s=-", key);
+        return;
+    }
+    const uint64_t x10 = w.probe_bytes * 10 / w.probe_us;
+    reply.print(" %s=%llu.%u", key, static_cast<unsigned long long>(x10 / 10),
+                static_cast<unsigned>(x10 % 10));
+}
+
+void print_cpu(mplane_reply& reply, const char* which, const sdio_test_window_stats& c6,
+               const sdio_test_window_stats& p4)
+{
+    reply.print("test_sdio_stat cpu=%s c6_us=%lu p4_us=%lu", which,
+                static_cast<unsigned long>(c6.window_us),
+                static_cast<unsigned long>(p4.window_us));
+    print_permille(reply, "c6", c6.valid ? c6.busy_permille[0] : 0xffff);
+    for (uint8_t c = 0; c < 2; ++c)
+    {
+        char key[8];
+        snprintf(key, sizeof(key), "p4c%u", static_cast<unsigned>(c));
+        print_permille(reply, key,
+                       p4.valid && c < p4.cores ? p4.busy_permille[c] : 0xffff);
+    }
+    reply.write("\n");
+}
+
+void print_flow(mplane_reply& reply, const char* name, const sdio_test_flow& f)
+{
+    if (!f.ran)
+    {
+        return;
+    }
+    const uint64_t kbps = f.rx_us ? f.rx_bytes * 8000 / f.rx_us : 0;
+    reply.print("test_sdio_stat flow=%s sent=%lu send_fail=%lu tx_us=%lu rx=%lu lost=%lu "
+                "reorder=%lu bad=%lu rx_us=%lu rx_bytes=%llu kbps=%llu\n",
+                name, static_cast<unsigned long>(f.sent),
+                static_cast<unsigned long>(f.send_fail),
+                static_cast<unsigned long>(f.sender_us), static_cast<unsigned long>(f.rx),
+                static_cast<unsigned long>(f.lost), static_cast<unsigned long>(f.reorder),
+                static_cast<unsigned long>(f.bad), static_cast<unsigned long>(f.rx_us),
+                static_cast<unsigned long long>(f.rx_bytes),
+                static_cast<unsigned long long>(kbps));
+}
+
 const char* bool_name(bool v)
 {
     return v ? "true" : "false";
@@ -137,6 +318,13 @@ const mplane_commands::command mplane_commands::k_commands[] = {
      needs::test, &mplane_commands::cmd_test_wifi_tx},
     {"test_wifi_rx_stat", "twrs", "clear=<bool>", needs::test,
      &mplane_commands::cmd_test_wifi_rx_stat},
+    {"test_sdio", "tsd",
+     "dir=<p4c6|c6p4|both> mtu=<8-1504> count=<0-1000000> [pacing_us=<0-1000000>, count*pacing_us <= 1 h] "
+     "[probe=<off|int|psram>] [base_ms=<0-10000>] [axi=<off|port[,port]>]  (count=0: stop; "
+     "axi ports: cache vdma1 vdma2 dma2d h264a h264b psram cam lcd, default cache,psram, "
+     "P4 rev 3.0+ only)",
+     needs::test, &mplane_commands::cmd_test_sdio},
+    {"test_sdio_stat", "tsds", "", needs::test, &mplane_commands::cmd_test_sdio_stat},
 };
 
 mplane_commands::mplane_commands(mplane_device_backend& device,
@@ -987,4 +1175,174 @@ void mplane_commands::cmd_test_wifi_rx_stat(char* args, mplane_reply& reply)
         return;
     }
     print_stats("test_wifi_rx_stat", test_->wifi_rx_stats(clear), true, reply);
+}
+
+constexpr uint64_t k_sdio_test_max_paced_us = 3600ull * 1000000ull;
+
+void mplane_commands::cmd_test_sdio(char* args, mplane_reply& reply)
+{
+    static const char* const k_keys[] = {"dir",   "mtu",     "count", "pacing_us",
+                                         "probe", "base_ms", "axi",   nullptr};
+    mplane_args kv;
+    unsigned long count = 0;
+    if (!parse_args(args, k_keys, &kv) ||
+        kv.get_uint("count", 0, 1000000, &count) != mplane_args::status::ok)
+    {
+        reply.nok(mplane_status::invalid);
+        return;
+    }
+    sdio_test_request req;
+    req.count = static_cast<uint32_t>(count);
+    if (count != 0)
+    {
+        unsigned long mtu = 0;
+        unsigned long pacing = 0;
+        unsigned long base = req.base_ms;
+        const char* dir = kv.find("dir");
+        const char* probe = kv.find("probe");
+        if (kv.get_uint("mtu", 8, 1504, &mtu) != mplane_args::status::ok ||
+            kv.get_uint("pacing_us", 0, 1000000, &pacing) == mplane_args::status::invalid ||
+            kv.get_uint("base_ms", 0, 10000, &base) == mplane_args::status::invalid ||
+            dir == nullptr ||
+            // Microsecond counters are 32-bit: keep a paced run under an hour.
+            static_cast<uint64_t>(count) * pacing > k_sdio_test_max_paced_us)
+        {
+            reply.nok(mplane_status::invalid);
+            return;
+        }
+        if (strcasecmp(dir, "p4c6") == 0)
+        {
+            req.dir = sdio_test_dir::p4c6;
+        }
+        else if (strcasecmp(dir, "c6p4") == 0)
+        {
+            req.dir = sdio_test_dir::c6p4;
+        }
+        else if (strcasecmp(dir, "both") == 0)
+        {
+            req.dir = sdio_test_dir::both;
+        }
+        else
+        {
+            reply.nok(mplane_status::invalid);
+            return;
+        }
+        if (probe == nullptr || strcasecmp(probe, "off") == 0)
+        {
+            req.probe = sdio_test_probe::off;
+        }
+        else if (strcasecmp(probe, "int") == 0)
+        {
+            req.probe = sdio_test_probe::internal;
+        }
+        else if (strcasecmp(probe, "psram") == 0)
+        {
+            req.probe = sdio_test_probe::psram;
+        }
+        else
+        {
+            reply.nok(mplane_status::invalid);
+            return;
+        }
+        const char* axi = kv.find("axi");
+        if (axi != nullptr && !parse_axi(axi, req.axi_agent))
+        {
+            reply.nok(mplane_status::invalid);
+            return;
+        }
+        req.mtu = static_cast<uint16_t>(mtu);
+        req.pacing_us = static_cast<uint32_t>(pacing);
+        req.base_ms = static_cast<uint32_t>(base);
+    }
+    const mplane_status st = test_->sdio_test(req);
+    if (st != mplane_status::ok)
+    {
+        reply.nok(st);
+        return;
+    }
+    reply.ok();
+}
+
+void mplane_commands::cmd_test_sdio_stat(char* args, mplane_reply& reply)
+{
+    if (!args_empty(args))
+    {
+        reply.nok(mplane_status::invalid);
+        return;
+    }
+    sdio_test_result r;
+    const mplane_status st = test_->sdio_test_stat(&r);
+    if (st != mplane_status::ok)
+    {
+        reply.nok(st);
+        return;
+    }
+    reply.print("test_sdio_stat state=%s", sdio_state_name(r.state));
+    if (r.state == sdio_test_state::idle)
+    {
+        reply.write("\n");
+        return;
+    }
+    if (r.error != nullptr)
+    {
+        reply.print(" error=%s", r.error);
+    }
+    reply.print(" run=%u dir=%s mtu=%u count=%lu pacing_us=%lu probe=%s base_ms=%lu",
+                static_cast<unsigned>(r.run), sdio_dir_name(r.req.dir),
+                static_cast<unsigned>(r.req.mtu), static_cast<unsigned long>(r.req.count),
+                static_cast<unsigned long>(r.req.pacing_us), sdio_probe_name(r.req.probe),
+                static_cast<unsigned long>(r.req.base_ms));
+    const bool axi = r.req.axi_agent[0] != 0 || r.req.axi_agent[1] != 0;
+    if (!axi)
+    {
+        reply.write(" axi=off\n");
+    }
+    else if (r.req.axi_agent[1] == 0)
+    {
+        reply.print(" axi=%s\n", axi_name(r.req.axi_agent[0]));
+    }
+    else
+    {
+        reply.print(" axi=%s,%s\n", axi_name(r.req.axi_agent[0]), axi_name(r.req.axi_agent[1]));
+    }
+    print_flow(reply, "p4c6", r.p4c6);
+    print_flow(reply, "c6p4", r.c6p4);
+    if (r.c6_base.valid || r.p4_base.valid)
+    {
+        print_cpu(reply, "base", r.c6_base, r.p4_base);
+    }
+    if (r.c6_load.valid || r.p4_load.valid)
+    {
+        print_cpu(reply, "load", r.c6_load, r.p4_load);
+    }
+    if (r.req.probe != sdio_test_probe::off)
+    {
+        reply.print("test_sdio_stat membus=base mem=%s", sdio_probe_name(r.req.probe));
+        print_probe(reply, "c6", r.c6_base);
+        print_probe(reply, "p4", r.p4_base);
+        reply.print("\ntest_sdio_stat membus=load mem=%s", sdio_probe_name(r.req.probe));
+        print_probe(reply, "c6", r.c6_load);
+        print_probe(reply, "p4", r.p4_load);
+        reply.write("\n");
+    }
+    if (axi && r.p4_base.valid)
+    {
+        print_axi(reply, "base", r.p4_base);
+    }
+    if (axi && r.p4_load.valid)
+    {
+        print_axi(reply, "load", r.p4_load);
+    }
+    if (r.p4_load.valid)
+    {
+        reply.print("test_sdio_stat link p4_credit_waits=%lu p4_rx_reads=%lu p4_tx_writes=%lu "
+                    "p4_tx_slots=%lu p4_tx_msgs=%lu freq_khz=%lu link_downs=%lu\n",
+                    static_cast<unsigned long>(r.p4_credit_waits),
+                    static_cast<unsigned long>(r.p4_rx_reads),
+                    static_cast<unsigned long>(r.p4_tx_writes),
+                    static_cast<unsigned long>(r.p4_tx_slots),
+                    static_cast<unsigned long>(r.p4_tx_msgs),
+                    static_cast<unsigned long>(r.p4_link_freq_khz),
+                    static_cast<unsigned long>(r.p4_link_downs));
+    }
 }

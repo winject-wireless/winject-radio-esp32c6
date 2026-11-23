@@ -7,6 +7,7 @@ idf_component_register(
         "settings.cpp"
         "settings_blob.cpp"
         "uart_console.cpp"
+        "diag/sdio_bwtest.cpp"
         "diag/test_run.cpp"
         "diag/wifi_tx_test.cpp"
         "endpoint/sdio_endpoint.cpp"
@@ -32,6 +33,7 @@ idf_component_register(
         "radio"
     REQUIRES
         sdio_link_slave
+        sdio_test_meter
         app_update
         esp_driver_gpio
         esp_driver_tsens

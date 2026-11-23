@@ -77,6 +77,8 @@ private:
     void cmd_test_wifi_rx(char* args, mplane_reply& reply);
     void cmd_test_wifi_tx(char* args, mplane_reply& reply);
     void cmd_test_wifi_rx_stat(char* args, mplane_reply& reply);
+    void cmd_test_sdio(char* args, mplane_reply& reply);
+    void cmd_test_sdio_stat(char* args, mplane_reply& reply);
 
     void handle_tune(char* args, const char* name, const tune_field* fields,
                      size_t field_count, mplane_reply& reply);

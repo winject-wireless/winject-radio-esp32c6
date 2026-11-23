@@ -13,16 +13,12 @@
 static const char *TAG = "sdio_link";
 
 #define TX_BUF_SIZE SDIO_LINK_SLAVE_RX_BUF_SIZE
-// A host transfer longer than one receive buffer arrives as several buffers
-// (ESP_ERR_NOT_FINISHED); they are joined here before parsing.
-#define REASM_SIZE (4 * SDIO_LINK_SLAVE_RX_BUF_SIZE)
 
 static sdio_msg_cb_t s_cb;
 static void *s_ctx;
 static uint8_t **s_tx_bufs;
 static QueueHandle_t s_tx_free;  // indices of free send buffers
 static SemaphoreHandle_t s_tx_lock;
-static uint8_t *s_reasm;
 static portMUX_TYPE s_stats_mux = portMUX_INITIALIZER_UNLOCKED;
 static sdio_link_slave_stats_t s_stats;
 
@@ -39,7 +35,8 @@ static void parse(const uint8_t *buf, size_t len)
 {
     sdio_msg_parse_result_t r;
     size_t used = sdio_msg_parse(buf, len, count_rx, NULL, &r);
-    // One host transfer always holds whole messages, so a tail is malformed too.
+    // The host packs whole messages into each receive buffer
+    // (docs/sdio-link.md), so a tail is malformed too.
     if (r != SDIO_MSG_PARSE_OK || used != len) {
         taskENTER_CRITICAL(&s_stats_mux);
         s_stats.rx_bad++;
@@ -49,10 +46,11 @@ static void parse(const uint8_t *buf, size_t len)
 
 static void rx_task(void *arg)
 {
-    size_t reasm_len = 0;
-    bool reasm_overflow = false;
     for (;;) {
         sdio_slave_buf_handle_t h;
+        // A host write longer than one buffer arrives as several
+        // (ESP_ERR_NOT_FINISHED until the last); each holds whole messages and
+        // is parsed where it is.
         esp_err_t ret = sdio_slave_recv_packet(&h, portMAX_DELAY);
         if (ret != ESP_OK && ret != ESP_ERR_NOT_FINISHED) {
             ESP_LOGE(TAG, "recv: 0x%x", ret);
@@ -60,27 +58,7 @@ static void rx_task(void *arg)
         }
         size_t len;
         uint8_t *buf = sdio_slave_recv_get_buf(h, &len);
-        if (ret == ESP_OK && reasm_len == 0) {
-            parse(buf, len);  // common case: the transfer fits one buffer
-        } else {
-            if (reasm_len + len <= REASM_SIZE) {
-                memcpy(s_reasm + reasm_len, buf, len);
-                reasm_len += len;
-            } else {
-                reasm_overflow = true;
-            }
-            if (ret == ESP_OK) {
-                if (reasm_overflow) {
-                    taskENTER_CRITICAL(&s_stats_mux);
-                    s_stats.rx_bad++;
-                    taskEXIT_CRITICAL(&s_stats_mux);
-                } else {
-                    parse(s_reasm, reasm_len);
-                }
-                reasm_len = 0;
-                reasm_overflow = false;
-            }
-        }
+        parse(buf, len);
         ESP_ERROR_CHECK(sdio_slave_recv_load_buf(h));
     }
 }
@@ -92,8 +70,7 @@ esp_err_t sdio_link_slave_start(const sdio_link_slave_config_t *config, sdio_msg
     s_tx_free = xQueueCreate(config->tx_bufs, sizeof(int));
     s_tx_lock = xSemaphoreCreateMutex();
     s_tx_bufs = calloc(config->tx_bufs, sizeof(uint8_t *));
-    s_reasm = malloc(REASM_SIZE);
-    if (!s_tx_free || !s_tx_lock || !s_tx_bufs || !s_reasm) {
+    if (!s_tx_free || !s_tx_lock || !s_tx_bufs) {
         return ESP_ERR_NO_MEM;
     }
     for (int i = 0; i < config->tx_bufs; i++) {

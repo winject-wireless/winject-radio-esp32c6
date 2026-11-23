@@ -6,7 +6,8 @@
 
 class wifi;
 
-// mplane_test_backend: WiFi test tap/generator. The Ethernet tests reply
+// mplane_test_backend: WiFi test tap/generator and the SDIO link test
+// (sdio_bwtest, needs no radio). The Ethernet tests reply
 // ENOTSUP (no IP stack on the C6). WiFi tests reply ENODEV while the radio is
 // down.
 class test_backend_esp : public mplane_test_backend
@@ -21,6 +22,9 @@ public:
     mplane_status set_wifi_rx_match(const wifi_rx_match& match) override;
     rx_test_stats wifi_rx_stats(bool clear) override;
     mplane_status wifi_tx(const wifi_tx_request& req) override;
+
+    mplane_status sdio_test(const sdio_test_request& req) override;
+    mplane_status sdio_test_stat(sdio_test_result* out) const override;
 
 private:
     wifi& radio_;

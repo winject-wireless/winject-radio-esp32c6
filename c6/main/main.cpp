@@ -9,6 +9,7 @@
 #include "mplane_commands.h"
 #include "packet.h"
 #include "radio_backend_esp.h"
+#include "sdio_bwtest.h"
 #include "sdio_console.h"
 #include "sdio_endpoint.h"
 #include "sdio_link_slave.h"
@@ -52,6 +53,10 @@ static void on_link_message(void* ctx, uint8_t plane, const uint8_t* payload, ui
     else if (plane == SDIO_MSG_PLANE_OTA)
     {
         sdio_ota_server_on_message(payload, len);
+    }
+    else if (plane == SDIO_MSG_PLANE_TEST)
+    {
+        sdio_bwtest::instance().on_message(payload, len);
     }
     else
     {
