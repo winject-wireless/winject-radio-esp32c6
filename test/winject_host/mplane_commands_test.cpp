@@ -857,7 +857,10 @@ TEST_F(MplaneCommandsTest, TestSdioRejectsBadRequests)
     EXPECT_EQ(run("test_sdio dir=both mtu=100 count=1 probe=l2"), "NOK EINVAL\n");
     EXPECT_EQ(run("test_sdio dir=both mtu=100"), "NOK EINVAL\n");
     EXPECT_EQ(run("test_sdio dir=both mtu=100 count=1 rate=5"), "NOK EINVAL\n");
+    // Paced runs over an hour (32-bit microsecond counters).
+    EXPECT_EQ(run("test_sdio dir=p4c6 mtu=100 count=10000 pacing_us=360001"), "NOK EINVAL\n");
     EXPECT_EQ(test.sdio_calls, calls);
+    EXPECT_EQ(run("test_sdio dir=p4c6 mtu=100 count=10000 pacing_us=360000"), "OK\n");
     test.next_status = mplane_status::already;
     EXPECT_EQ(run("test_sdio dir=both mtu=100 count=1"), "NOK EALREADY\n");
 }

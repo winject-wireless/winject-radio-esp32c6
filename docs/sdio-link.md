@@ -48,12 +48,12 @@ Raw link capacity, CPU and memory-bus load, measured by the production firmware.
 | `bw_tx_done` | P4 → C6 | After its last packet: sent, send failures, elapsed time |
 | `test_packet` (run, seq, filler) | both | Counted by the receiver per run: packets, bytes, sequence gaps, reorders, first-to-last time |
 | `get_rx_stats` (clear, probe, axi ports) | C6 → P4 | The P4 replies `rx_stats` for its current window; with `clear` it starts a new one (counters, CPU, probe, AXI) and sets its memory probe and AXI monitor ports |
-| `rx_stats` | P4 → C6 | Received test packets, CPU per core, probe figures and link counters (`tx_credit_waits`, `rx_reads`) for the window |
+| `rx_stats` | P4 → C6 | Received test packets, CPU per core, probe figures and link counters for the window (printed as `p4_credit_waits p4_rx_reads p4_tx_writes p4_tx_slots p4_tx_msgs freq_khz link_downs`); echoes the request's tag so a late reply is not taken for the next one. Later fields are appended: a C6 accepts a shorter reply from an older P4 (missing fields read 0) and ignores fields it does not know |
 
 A P4 firmware without the test plane drops the rest of a transfer that carries one, so update both sides together.
 
 ```
-test_sdio dir=<p4c6|c6p4|both> mtu=<8-1504> count=<n> [pacing_us=<us>] [probe=<off|int|psram>] [base_ms=<ms, default 500>] [axi=<off|port[,port]>, default cache,psram]
+test_sdio dir=<p4c6|c6p4|both> mtu=<8-1504> count=<1-1000000, count × pacing_us ≤ 1 h> [pacing_us=<us>] [probe=<off|int|psram>] [base_ms=<ms, default 500>] [axi=<off|port[,port]>, default cache,psram]
 test_sdio count=0          # stop
 test_sdio_stat             # state=running|done|stopped|failed and the result
 ```
@@ -76,9 +76,10 @@ test_sdio_stat membus=base mem=int c6=125.0 p4=210.3
 test_sdio_stat membus=load mem=int c6=25.0 p4=190.6
 test_sdio_stat axi=base cache_rd=4.1 cache_wr=1.0 cache_rd_max=30.2 cache_wr_max=9.9 psram_rd=10.2 psram_wr=3.1 psram_rd_max=61.0 psram_wr_max=22.4 samples=500
 test_sdio_stat axi=load cache_rd=12.3 cache_wr=4.0 cache_rd_max=55.1 cache_wr_max=20.0 psram_rd=31.0 psram_wr=9.5 psram_rd_max=99.9 psram_wr_max=40.2 samples=2200
-test_sdio_stat link p4_credit_waits=12 p4_rx_reads=40
+test_sdio_stat link p4_credit_waits=12 p4_rx_reads=40 p4_tx_writes=260 p4_tx_slots=1000 p4_tx_msgs=1004 freq_khz=40000 link_downs=0
 ```
 
+- **`lost` / `reorder`**: sequence gaps, and packets arriving below the highest seq so far (late or repeated). A late packet lowers `lost` only if its seq was a gap within the last 256.
 - **`kbps`**: test-packet bytes (the whole d-plane-sized payload, without the 4-byte header and padding) over the receiver's first-to-last time.
 - **`cpu`**: percent of each core not spent in the idle task or the memory probe, over the window (`-` without FreeRTOS run-time stats; the P4 needs `CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS` and `CONFIG_FREERTOS_USE_TRACE_FACILITY`). Other traffic on the link (video, m-plane) is included.
 - **`membus`**: the memory probe, one memcpy task per core at idle priority, reported as MB copied per second of its own CPU time (all cores together on the P4). The drop from `base` to `load` is the contention the link adds to that memory. `int`: the C6's SRAM (2 × 8 KB) and, on the P4, 2 × 8 KB of L2MEM per core through its uncached alias, so every access goes to the bus. `psram`: the P4's PSRAM only (2 × 256 KB per core, cached; the C6 has none). The probe uses the idle time, so `cpu` subtracts it and the link figures can move a little with it on: compare runs with the same `probe`.

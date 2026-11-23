@@ -153,7 +153,6 @@ void print_permille(mplane_reply& reply, const char* key, uint16_t v)
                 static_cast<unsigned>(v % 10));
 }
 
-// Memory probe in MB/s of probe CPU time (bytes per microsecond), one decimal.
 void print_axi(mplane_reply& reply, const char* which, const sdio_test_window_stats& p4)
 {
     reply.print("test_sdio_stat axi=%s", which);
@@ -182,6 +181,7 @@ void print_axi(mplane_reply& reply, const char* which, const sdio_test_window_st
     reply.print(" samples=%lu\n", static_cast<unsigned long>(p4.axi_samples));
 }
 
+// Memory probe in MB/s of probe CPU time (bytes per microsecond), one decimal.
 void print_probe(mplane_reply& reply, const char* key, const sdio_test_window_stats& w)
 {
     if (!w.valid || !w.probe_ok || w.probe_us == 0)
@@ -319,7 +319,7 @@ const mplane_commands::command mplane_commands::k_commands[] = {
     {"test_wifi_rx_stat", "twrs", "clear=<bool>", needs::test,
      &mplane_commands::cmd_test_wifi_rx_stat},
     {"test_sdio", "tsd",
-     "dir=<p4c6|c6p4|both> mtu=<8-1504> count=<0-1000000> [pacing_us=<0-1000000>] "
+     "dir=<p4c6|c6p4|both> mtu=<8-1504> count=<0-1000000> [pacing_us=<0-1000000>, count*pacing_us <= 1 h] "
      "[probe=<off|int|psram>] [base_ms=<0-10000>] [axi=<off|port[,port]>]  (count=0: stop; "
      "axi ports: cache vdma1 vdma2 dma2d h264a h264b psram cam lcd, default cache,psram, "
      "P4 rev 3.0+ only)",
@@ -1177,6 +1177,8 @@ void mplane_commands::cmd_test_wifi_rx_stat(char* args, mplane_reply& reply)
     print_stats("test_wifi_rx_stat", test_->wifi_rx_stats(clear), true, reply);
 }
 
+constexpr uint64_t k_sdio_test_max_paced_us = 3600ull * 1000000ull;
+
 void mplane_commands::cmd_test_sdio(char* args, mplane_reply& reply)
 {
     static const char* const k_keys[] = {"dir",   "mtu",     "count", "pacing_us",
@@ -1201,7 +1203,9 @@ void mplane_commands::cmd_test_sdio(char* args, mplane_reply& reply)
         if (kv.get_uint("mtu", 8, 1504, &mtu) != mplane_args::status::ok ||
             kv.get_uint("pacing_us", 0, 1000000, &pacing) == mplane_args::status::invalid ||
             kv.get_uint("base_ms", 0, 10000, &base) == mplane_args::status::invalid ||
-            dir == nullptr)
+            dir == nullptr ||
+            // Microsecond counters are 32-bit: keep a paced run under an hour.
+            static_cast<uint64_t>(count) * pacing > k_sdio_test_max_paced_us)
         {
             reply.nok(mplane_status::invalid);
             return;

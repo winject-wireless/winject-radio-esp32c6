@@ -127,10 +127,24 @@ static void test_rx_counter(void)
     CHECK(r.c.pkts == 3 && r.c.lost == 2 && r.c.reorder == 0 && r.c.bytes == 192);
     rx(&r, 7, 2, 64, 1300);  // late
     CHECK(r.c.pkts == 4 && r.c.lost == 1 && r.c.reorder == 1);
-    rx(&r, 7, 4, 64, 1400);  // repeat
-    CHECK(r.c.reorder == 2 && r.c.lost == 0 && r.c.span_us == 400);
+    rx(&r, 7, 4, 64, 1400);  // repeat: 3 is still missing
+    CHECK(r.c.reorder == 2 && r.c.lost == 1 && r.c.span_us == 400);
+    rx(&r, 7, 2, 64, 1410);  // repeat of a late one
+    CHECK(r.c.reorder == 3 && r.c.lost == 1);
+    rx(&r, 7, 3, 64, 1420);  // late
+    CHECK(r.c.reorder == 4 && r.c.lost == 0);
     rx(&r, 7, 5, 4, 1500);   // too short
-    CHECK(r.c.bad == 1 && r.c.pkts == 5);
+    CHECK(r.c.bad == 1 && r.c.pkts == 7);
+    // A gap wider than the window, then a late packet from far behind: too
+    // old to tell, so it does not lower lost; one inside the window does.
+    rx(&r, 7, 5 + SDIO_TEST_RX_WINDOW + 10, 64, 1600);
+    CHECK(r.c.lost == SDIO_TEST_RX_WINDOW + 10);
+    rx(&r, 7, 6, 64, 1700);
+    CHECK(r.c.lost == SDIO_TEST_RX_WINDOW + 10);
+    rx(&r, 7, 5 + SDIO_TEST_RX_WINDOW + 5, 64, 1800);
+    CHECK(r.c.lost == SDIO_TEST_RX_WINDOW + 9);
+    rx(&r, 7, 5 + SDIO_TEST_RX_WINDOW + 5, 64, 1900);
+    CHECK(r.c.lost == SDIO_TEST_RX_WINDOW + 9);
     // First packet not seq 0: the ones before it count as lost.
     sdio_test_rx_reset(&r, 8);
     rx(&r, 8, 3, 64, 0);

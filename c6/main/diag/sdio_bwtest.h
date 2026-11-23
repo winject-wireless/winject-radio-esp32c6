@@ -36,10 +36,10 @@ private:
     sdio_bwtest();
     static void task(void* arg);
     void run();
-    // Sends msg and waits for a reply of reply_type for the current run. A
-    // reply shorter than out_len but at least min_len (0 = out_len) is
-    // accepted, the rest of out zeroed.
-    bool request(const void* msg, size_t len, uint8_t reply_type, void* out, size_t out_len,
+    // Sends msg and waits for the reply armed as `key` (arm()). A reply
+    // shorter than out_len but at least min_len (0 = out_len) is accepted,
+    // the rest of out zeroed.
+    bool request(const void* msg, size_t len, uint32_t key, void* out, size_t out_len,
                  uint32_t timeout_ms, size_t min_len = 0);
     bool send(const void* msg, size_t len);
     // Reads the P4's window; with SDIO_TEST_FLAG_CLEAR opens the next one with
@@ -47,7 +47,8 @@ private:
     bool get_p4_window(uint8_t flags, uint8_t probe, const uint8_t* axi,
                        sdio_test_rx_stats_t* out);
     void generate(sdio_test_flow* flow);
-    bool wait_bw_tx_done(sdio_test_bw_tx_done_t* done, const char** error);
+    bool send_bw_tx_stop();
+    bool wait_bw_tx_done(uint32_t key, sdio_test_bw_tx_done_t* done, const char** error);
     void finish(sdio_test_state state, const char* error);
 
     sdio_test_request req_;
@@ -55,9 +56,17 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<bool> stop_{false};
 
-    // Reply mailbox: one outstanding request at a time.
+    // Reply mailbox: one outstanding request at a time. expect_ = the awaited
+    // type | tag << 8 (0 = none); the receive task claims it by exchanging it
+    // for 0, then fills reply_ and stamps reply_key_ before giving reply_sem_,
+    // so a waiter only takes a reply stamped with its own key (a late one for
+    // a timed-out request is skipped). rx_stats replies also echo the tag.
+    uint32_t arm(uint8_t type);
+    bool wait_reply(uint32_t key, uint32_t timeout_ms);
     SemaphoreHandle_t reply_sem_ = nullptr;
-    std::atomic<uint8_t> expect_{0};
+    std::atomic<uint32_t> expect_{0};
+    uint8_t tag_ = 0;
+    uint32_t reply_key_ = 0;
     uint8_t reply_[sizeof(sdio_test_rx_stats_t)]{};
     size_t reply_len_ = 0;
 

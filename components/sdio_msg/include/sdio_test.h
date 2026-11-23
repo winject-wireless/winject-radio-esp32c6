@@ -99,7 +99,7 @@ typedef struct __attribute__((packed)) {
     uint8_t type;  // SDIO_TEST_GET_RX_STATS
     uint8_t flags;
     uint8_t probe;  // for the new window (with SDIO_TEST_FLAG_CLEAR)
-    uint8_t reserved;
+    uint8_t tag;    // echoed in the rx_stats reply (a P4 that predates it sends 0)
     uint16_t run;   // test packets of this run are counted in the new window
     // AXI monitor ports for the new window (SDIO_TEST_AXI_*, NONE = unit off);
     // ignored where there is no monitor.
@@ -141,7 +141,7 @@ typedef struct __attribute__((packed)) {
 
 typedef struct __attribute__((packed)) {
     uint8_t type;  // SDIO_TEST_RX_STATS
-    uint8_t reserved;
+    uint8_t tag;   // the get_rx_stats' tag
     uint16_t run;
     sdio_test_rx_counts_t rx;
     sdio_test_window_t window;
@@ -160,10 +160,16 @@ typedef struct __attribute__((packed)) {
 #define SDIO_TEST_RX_STATS_MIN_LEN (sizeof(sdio_test_rx_stats_t) - 8)
 
 // Receive counter for one side.
+#define SDIO_TEST_RX_WINDOW 256  // seqs below next_seq tracked for late arrivals
+
 typedef struct {
     uint16_t run;
     bool any;
     uint32_t next_seq;
+    // Received bits of seqs [next_seq - SDIO_TEST_RX_WINDOW, next_seq), by
+    // seq % SDIO_TEST_RX_WINDOW: a late packet lowers `lost` only if its seq
+    // was a gap, a repeat only counts as reorder.
+    uint32_t seen[SDIO_TEST_RX_WINDOW / 32];
     int64_t first_us;
     int64_t last_us;
     sdio_test_rx_counts_t c;

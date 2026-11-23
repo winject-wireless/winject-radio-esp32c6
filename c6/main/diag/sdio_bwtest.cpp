@@ -97,9 +97,16 @@ void sdio_bwtest::on_message(const uint8_t* payload, uint16_t len)
         portEXIT_CRITICAL(&mux_);
         return;
     }
-    if (len < 4 || len > sizeof(reply_) || type != expect_.load())
+    uint32_t key = expect_.load();
+    if (len < 4 || key == 0 || type != (key & 0xffu))
     {
         return;  // unexpected, late (timed out) or malformed reply
+    }
+    // rx_stats echo the request's tag; 0 = a P4 that predates the tag.
+    const uint8_t tag = static_cast<uint8_t>(key >> 8);
+    if (type == SDIO_TEST_RX_STATS && payload[1] != 0 && payload[1] != tag)
+    {
+        return;
     }
     uint16_t run;
     memcpy(&run, payload + 2, sizeof(run));
@@ -107,10 +114,56 @@ void sdio_bwtest::on_message(const uint8_t* payload, uint16_t len)
     {
         return;
     }
-    memcpy(reply_, payload, len);
-    reply_len_ = len;
-    expect_.store(0);
+    if (!expect_.compare_exchange_strong(key, 0))
+    {
+        return;  // the waiter gave up meanwhile
+    }
+    // A newer P4 may append fields: keep what this C6 knows.
+    const size_t n = len < sizeof(reply_) ? len : sizeof(reply_);
+    memcpy(reply_, payload, n);
+    reply_len_ = n;
+    reply_key_ = key;
     xSemaphoreGive(reply_sem_);
+}
+
+uint32_t sdio_bwtest::arm(uint8_t type)
+{
+    tag_ = static_cast<uint8_t>(tag_ + 1 == 0 ? 1 : tag_ + 1);
+    const uint32_t key = type | (static_cast<uint32_t>(tag_) << 8);
+    expect_.store(key);
+    return key;
+}
+
+bool sdio_bwtest::wait_reply(uint32_t key, uint32_t timeout_ms)
+{
+    TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(timeout_ms);
+    bool claimed = false;
+    for (;;)
+    {
+        const TickType_t now = xTaskGetTickCount();
+        const TickType_t left =
+            static_cast<int32_t>(deadline - now) > 0 ? deadline - now : 0;
+        if (xSemaphoreTake(reply_sem_, left) == pdTRUE)
+        {
+            if (reply_key_ == key)
+            {
+                return true;
+            }
+            continue;  // a reply to an earlier, timed-out request
+        }
+        if (claimed)
+        {
+            return false;  // claimed but never given: not expected
+        }
+        uint32_t k = key;
+        if (expect_.compare_exchange_strong(k, 0))
+        {
+            return false;
+        }
+        // The receive task claimed it just now: its give follows shortly.
+        claimed = true;
+        deadline = xTaskGetTickCount() + pdMS_TO_TICKS(100);
+    }
 }
 
 mplane_status sdio_bwtest::start(const sdio_test_request& req)
@@ -180,23 +233,20 @@ bool sdio_bwtest::send(const void* msg, size_t len)
                                 pdMS_TO_TICKS(k_send_timeout_ms)) == ESP_OK;
 }
 
-bool sdio_bwtest::request(const void* msg, size_t len, uint8_t reply_type, void* out,
-                          size_t out_len, uint32_t timeout_ms, size_t min_len)
+bool sdio_bwtest::request(const void* msg, size_t len, uint32_t key, void* out, size_t out_len,
+                          uint32_t timeout_ms, size_t min_len)
 {
     if (min_len == 0 || min_len > out_len)
     {
         min_len = out_len;
     }
-    xSemaphoreTake(reply_sem_, 0);  // drop a stale give
-    expect_.store(reply_type);
     if (!send(msg, len))
     {
         expect_.store(0);
         return false;
     }
-    if (xSemaphoreTake(reply_sem_, pdMS_TO_TICKS(timeout_ms)) != pdTRUE)
+    if (!wait_reply(key, timeout_ms))
     {
-        expect_.store(0);
         return false;
     }
     if (reply_len_ < min_len)
@@ -222,7 +272,9 @@ bool sdio_bwtest::get_p4_window(uint8_t flags, uint8_t probe, const uint8_t* axi
         m.axi_agent[1] = axi[1];
     }
     m.run = run_;
-    return request(&m, sizeof(m), SDIO_TEST_RX_STATS, out, sizeof(*out), k_reply_timeout_ms,
+    const uint32_t key = arm(SDIO_TEST_RX_STATS);
+    m.tag = static_cast<uint8_t>(key >> 8);
+    return request(&m, sizeof(m), key, out, sizeof(*out), k_reply_timeout_ms,
                    SDIO_TEST_RX_STATS_MIN_LEN);
 }
 
@@ -258,7 +310,16 @@ void sdio_bwtest::generate(sdio_test_flow* flow)
     free(buf);
 }
 
-bool sdio_bwtest::wait_bw_tx_done(sdio_test_bw_tx_done_t* done, const char** error)
+bool sdio_bwtest::send_bw_tx_stop()
+{
+    sdio_test_bw_tx_t m{};
+    m.type = SDIO_TEST_BW_TX;
+    m.run = run_;
+    return send(&m, sizeof(m));  // count 0
+}
+
+bool sdio_bwtest::wait_bw_tx_done(uint32_t key, sdio_test_bw_tx_done_t* done,
+                                  const char** error)
 {
     uint32_t last_pkts = 0;
     uint32_t quiet_ms = 0;
@@ -268,6 +329,10 @@ bool sdio_bwtest::wait_bw_tx_done(sdio_test_bw_tx_done_t* done, const char** err
     {
         if (xSemaphoreTake(reply_sem_, pdMS_TO_TICKS(k_slice_ms)) == pdTRUE)
         {
+            if (reply_key_ != key)
+            {
+                continue;  // a late reply to an earlier request
+            }
             if (reply_len_ < sizeof(*done))
             {
                 *error = "bad_reply";
@@ -278,10 +343,7 @@ bool sdio_bwtest::wait_bw_tx_done(sdio_test_bw_tx_done_t* done, const char** err
         }
         if (stop_.load() && !stop_sent)
         {
-            sdio_test_bw_tx_t m{};
-            m.type = SDIO_TEST_BW_TX;
-            m.run = run_;
-            stop_sent = send(&m, sizeof(m));
+            stop_sent = send_bw_tx_stop();
         }
         portENTER_CRITICAL(&mux_);
         const uint32_t pkts = rx_.c.pkts;
@@ -295,7 +357,16 @@ bool sdio_bwtest::wait_bw_tx_done(sdio_test_bw_tx_done_t* done, const char** err
         quiet_ms += k_slice_ms;
         if (quiet_ms >= k_progress_timeout_ms)
         {
-            expect_.store(0);
+            // Stop the P4's sender too, or it runs on to `count` and the next
+            // requests queue behind it.
+            if (!stop_sent)
+            {
+                send_bw_tx_stop();
+            }
+            if (wait_reply(key, k_reply_timeout_ms))
+            {
+                memcpy(done, reply_, reply_len_ < sizeof(*done) ? reply_len_ : sizeof(*done));
+            }
             *error = "p4_tx_timeout";
             return false;
         }
@@ -335,7 +406,11 @@ void sdio_bwtest::run()
 
     if (error == nullptr && req.base_ms > 0)
     {
-        vTaskDelay(pdMS_TO_TICKS(req.base_ms));
+        // In slices, so a stop does not wait out a long baseline.
+        for (uint32_t ms = 0; ms < req.base_ms && !stop_.load(); ms += 50)
+        {
+            vTaskDelay(pdMS_TO_TICKS(req.base_ms - ms < 50 ? req.base_ms - ms : 50));
+        }
         sdio_test_meter_read(&mark, &w);
         r.c6_base = to_stats(w);
         if (get_p4_window(SDIO_TEST_FLAG_CLEAR, p4_probe, req.axi_agent, &st))
@@ -357,6 +432,7 @@ void sdio_bwtest::run()
 
         sdio_test_bw_tx_done_t done{};
         bool p4_sending = false;
+        uint32_t done_key = 0;
         if (sends_p4(req.dir))
         {
             sdio_test_bw_tx_t m{};
@@ -366,8 +442,7 @@ void sdio_bwtest::run()
             m.count = req.count;
             m.pacing_us = req.pacing_us;
             // Expect the done before sending: a short run may finish at once.
-            xSemaphoreTake(reply_sem_, 0);
-            expect_.store(SDIO_TEST_BW_TX_DONE);
+            done_key = arm(SDIO_TEST_BW_TX_DONE);
             p4_sending = send(&m, sizeof(m));
             if (!p4_sending)
             {
@@ -380,7 +455,7 @@ void sdio_bwtest::run()
             r.c6p4.ran = true;
             generate(&r.c6p4);
         }
-        if (p4_sending && !wait_bw_tx_done(&done, &error))
+        if (p4_sending && !wait_bw_tx_done(done_key, &done, &error))
         {
             p4_sending = false;
         }
